@@ -1,0 +1,14 @@
+{
+  "name": "codex-agent-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Codex-led task orchestration over Herdr with isolated work and verifiable results",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "cao": "bin/cao.mjs" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  }
+}

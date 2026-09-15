@@ -1,0 +1,168 @@
+import { spawn } from 'node:child_process';
+import { OrchestratorError } from './errors.mjs';
+
+function validateArgv(argv) {
+  if (!Array.isArray(argv) || argv.length === 0) {
+    throw new OrchestratorError('invalid_command', 'argv must be a nonempty string array');
+  }
+  for (const part of argv) {
+    if (typeof part !== 'string' || part.length === 0) {
+      throw new OrchestratorError('invalid_command', 'argv must contain only nonempty strings', { argv });
+    }
+  }
+}
+
+function appendBounded(state, chunk, maxBytes) {
+  if (state.truncated) return;
+  const nextSize = state.size + chunk.length;
+  if (nextSize <= maxBytes) {
+    state.chunks.push(chunk);
+    state.size = nextSize;
+    return;
+  }
+  const remaining = Math.max(0, maxBytes - state.size);
+  if (remaining > 0) state.chunks.push(chunk.subarray(0, remaining));
+  state.size = maxBytes;
+  state.truncated = true;
+}
+
+function bufferText(state) {
+  return Buffer.concat(state.chunks, state.size).toString('utf8');
+}
+
+function commandEnv(env) {
+  const next = { ...(env ?? process.env) };
+  delete next.NODE_TEST_CONTEXT;
+  return next;
+}
+
+export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes = 1048576, signal } = {}) {
+  validateArgv(argv);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0) {
+    throw new OrchestratorError('invalid_timeout', 'timeoutMs must be a non-negative integer', { timeoutMs });
+  }
+  if (!Number.isInteger(maxBytes) || maxBytes < 0) {
+    throw new OrchestratorError('invalid_max_bytes', 'maxBytes must be a non-negative integer', { maxBytes });
+  }
+  if (signal !== undefined && (typeof signal !== 'object' || typeof signal.aborted !== 'boolean')) {
+    throw new OrchestratorError('invalid_signal', 'signal must be an AbortSignal-compatible object');
+  }
+  if (signal?.aborted) {
+    throw new OrchestratorError('command_cancelled', 'command was cancelled before spawn', {
+      argv,
+      cwd,
+    });
+  }
+
+  const stdout = { chunks: [], size: 0, truncated: false };
+  const stderr = { chunks: [], size: 0, truncated: false };
+  let child;
+
+  try {
+    child = spawn(argv[0], argv.slice(1), {
+      cwd,
+      env: commandEnv(env),
+      shell: false,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (cause) {
+    throw new OrchestratorError('command_spawn_failed', `failed to spawn ${argv[0]}: ${cause.message}`, {
+      argv,
+      cause: cause.message,
+    });
+  }
+
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let termination;
+    let spawnError;
+    let killTimer;
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener?.('abort', onAbort);
+      fn(value);
+    };
+
+    const killOwnedProcess = (signal = 'SIGTERM') => {
+      try {
+        if (process.platform !== 'win32' && child.pid) {
+          process.kill(-child.pid, signal);
+        } else {
+          child.kill(signal);
+        }
+      } catch {
+        // Process may already be gone.
+      }
+    };
+
+    const terminate = (reason) => {
+      if (termination) return;
+      termination = reason;
+      killOwnedProcess();
+      killTimer = setTimeout(() => {
+        if (!settled) killOwnedProcess('SIGKILL');
+      }, 1000);
+      killTimer.unref();
+    };
+
+    const onAbort = () => terminate('cancelled');
+
+    const timer = timeoutMs === 0 ? null : setTimeout(() => {
+      terminate('timeout');
+    }, timeoutMs);
+    if (timer) timer.unref();
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+
+    child.stdout.on('data', (chunk) => appendBounded(stdout, chunk, maxBytes));
+    child.stderr.on('data', (chunk) => appendBounded(stderr, chunk, maxBytes));
+    child.on('error', (error) => {
+      spawnError = error;
+    });
+    child.on('close', (code, signal) => {
+      const result = {
+        code: code ?? (signal ? 128 : 1),
+        stdout: bufferText(stdout),
+        stderr: bufferText(stderr),
+        truncated: stdout.truncated || stderr.truncated,
+      };
+      if (termination === 'timeout') {
+        finish(reject, new OrchestratorError('command_timeout', `command timed out after ${timeoutMs}ms`, {
+          argv,
+          cwd,
+          timeoutMs,
+          signal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          truncated: result.truncated,
+        }));
+        return;
+      }
+      if (termination === 'cancelled') {
+        finish(reject, new OrchestratorError('command_cancelled', 'command was cancelled', {
+          argv,
+          cwd,
+          signal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          truncated: result.truncated,
+        }));
+        return;
+      }
+      if (spawnError) {
+        finish(reject, new OrchestratorError('command_spawn_failed', `failed to spawn ${argv[0]}: ${spawnError.message}`, {
+          argv,
+          cwd,
+          cause: spawnError.message,
+        }));
+        return;
+      }
+      finish(resolve, result);
+    });
+  });
+}
