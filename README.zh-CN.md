@@ -205,6 +205,30 @@ node bin/cao.mjs gateway list
 
 第一版 CC Switch source adapter 面向 schema version 18，支持来自 `settings_config.env` 的 Claude direct API 记录，以及显式 `--allow-shared` 复用 active Claude proxy。OAuth-only 和非 Claude 记录会列为 unsupported，不会伪装成 direct profile。详见[执行配置与路由](docs/zh-CN/execution-profiles.md)。
 
+## Agent 看板
+
+Agent Monitor 是本地只读状态页，用于查看 CAO runs 及关联的 Codex/Claude children。在项目 checkout 中启动：
+
+```bash
+node bin/cao.mjs monitor start --open
+```
+
+也可以告诉 Codex：
+
+```text
+打开当前项目Agent看板
+```
+
+省略 `--project`、`--run` 和 `--all` 时，CLI 使用当前目录的 Git root。页面仅绑定 localhost，URL fragment token 会自动进入浏览器 `sessionStorage`，并且只暴露 metadata。它不执行命令、不发送输入、不取消任务、不停止 agent，也不显示 prompt、tool input、tool output 或模型回复。`monitor stop` 只停止 monitor server。
+
+看板区分 CAO delivery 与原生 runtime state：原生 child idle/finished 不等于 CAO attempt 已 `accepted`。Codex metadata 优先使用 app-server proxy；当前本机 proxy 不可用时会回退到本地 SQLite metadata。Claude child 状态对新 CAO-managed private hooks 最可靠；unmanaged local fallback 置信度较低。页面还提供 Project view 与 Conversation view；当原生记录提供 token metadata 时，可以显示每个 agent 的 token 用量。Token 行只是用量观测，不是套餐余额、账单事实或某个任务的精确成本。详见[本地 Agent Monitor](docs/zh-CN/monitor.md)。
+
+想查看当前对话视图和 token 列，可以告诉 Codex：
+
+```text
+打开当前项目Agent看板，切到当前对话并显示每个Agent Token
+```
+
 ## Agent 支持
 
 | Agent | 任务字段值 | 当前验证情况 |
@@ -229,7 +253,7 @@ node bin/cao.mjs usage --today
 
 ## 验证与当前边界
 
-- CAO 由调用方通过 CLI 显式驱动，尚无后台调度器、MCP 服务或原生子代理遥测。
+- CAO 由调用方通过 CLI 显式驱动，尚无后台调度器或 MCP 服务。本地 Agent Monitor 可以观察部分原生 metadata，但覆盖取决于 source，不等同于硬性的原生 child telemetry。
 - worktree 和 `allowedPaths` 是协调机制，不是文件系统沙箱。未追踪且被忽略的文件，以及外部副作用，不在 Git 快照保证范围内。
 - 集成失败可能将修改留在项目。CAO 会阻止该项目接收新任务，直到恢复通过；`recover` 复验当前 checkout，不重复应用补丁。
 - 直接使用 `checkout` 的任务也可能保留未验收修改。应重试该任务，或在 worker 停止后恢复。跨 run 的项目锁要求同一状态目录。
@@ -255,6 +279,7 @@ npm run smoke -- --live           # 受控失败 → 修复 → 集成
 | --- | --- |
 | [架构与模块](docs/zh-CN/architecture.md) | CLI、状态存储、Herdr 适配、Git 隔离、验证与 profiled execution |
 | [执行配置与路由](docs/zh-CN/execution-profiles.md) | Profile CRUD、secret、CC Switch 导入、路由、gateway 生命周期 |
+| [本地 Agent Monitor](docs/zh-CN/monitor.md) | CAO、Codex、Claude metadata 的只读本地看板 |
 | [任务状态与恢复](docs/zh-CN/states.md) | 结果契约、重试、交互、checkout 与集成阻塞 |
 | [Token 用量报告](docs/zh-CN/usage.md) | 可选 Tokscale 集成、JSON 形状与归属边界 |
 | [Codex 技能草案](skills/herdr-dev/SKILL.md) | 由 Codex 驱动 CAO 的流程指引，不自动安装 |

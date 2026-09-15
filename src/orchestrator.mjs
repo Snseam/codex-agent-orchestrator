@@ -13,6 +13,7 @@ import { ProfileStore } from './profiles.mjs';
 import { GatewayManager } from './gateway/manager.mjs';
 import { selectRoute, reserveExecution, releaseExecution, explainRoute } from './routing.mjs';
 import { prepareExecution, cleanupExecution } from './execution-config.mjs';
+import { prepareClaudeTelemetry } from './monitor/claude.mjs';
 
 const time = () => new Date().toISOString();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -31,13 +32,15 @@ export function defaultStateRoot() {
 }
 
 export class Orchestrator {
-  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution } = {}) {
+  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution, telemetry = prepareClaudeTelemetry, coordinatorId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null } = {}) {
     this.root = path.resolve(stateRoot);
     this.herdr = herdr;
     this.command = command;
     this.profiles = profiles || new ProfileStore({ root: this.root });
     this.gateways = gateways || new GatewayManager({ root: this.root, profiles: this.profiles });
     this.materialize = materialize;
+    this.telemetry = telemetry;
+    this.coordinatorId = typeof coordinatorId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(coordinatorId) ? coordinatorId : null;
   }
 
   async _loadRun(id) {
@@ -60,6 +63,7 @@ export class Orchestrator {
       schemaVersion: 1, id: runId, project: info.root, baseCommit: info.head,
       baseline: await git.snapshot(info.root), initiallyDirty: info.dirty,
       herdrSession: `cao-${crypto.randomBytes(10).toString('hex')}`,
+      coordinatorThreadId: this.coordinatorId,
       createdAt: time(), updatedAt: time(), maxParallel, server: null, tasks: {},
     };
     await state.createRun(this.root, run);
@@ -151,6 +155,7 @@ export class Orchestrator {
         feedback: feedback || '', previousAttempt: previous?.id || null,
         baselineTree: previous?.baselineTree || null,
         launcherPid: process.pid, launcherHost: os.hostname(), launchFinishedAt: null,
+        coordinatorThreadId: this.coordinatorId,
       };
       record ||= { definition, digest, attempts: [] };
       record.attempts.push(attempt);
@@ -203,6 +208,16 @@ export class Orchestrator {
         attempt.launchManifest = manifest;
         await update(a => { a.launchManifest = manifest; a.nativeSession = manifest.nativeSession; });
       }
+      let launch = attempt.launchManifest || buildLaunch(task.definition, attempt.directory);
+      if (launch.kind === 'claude') {
+        const telemetry = await this.telemetry({ root: this.root, runId: run.id, task: task.definition, attempt, launch });
+        launch = telemetry.launch;
+        attempt.telemetry = telemetry.manifest;
+        await update(a => {
+          a.telemetry = telemetry.manifest;
+          if (!a.nativeSession && telemetry.manifest.enabled && telemetry.manifest.nativeSessionId) a.nativeSession = { id: telemetry.manifest.nativeSessionId, evidence: 'requested-via-native-cli', logRoots: [] };
+        });
+      }
       const server = await state.withLock(path.join(state.runPath(this.root, run.id), '.server.lock'), () => this.herdr.ensureServer(run.herdrSession, path.join(state.runPath(this.root, run.id), 'herdr-server.log')), { timeoutMs: 15000 });
       await this._change(run.id, r => { r.server ||= server; });
       await this._cancelCheck(run.id, task.definition.id);
@@ -215,7 +230,6 @@ export class Orchestrator {
         await this.herdr.prepareEnvironment(run.herdrSession, pane.pane_id, attempt.launchManifest);
         await this._cancelCheck(run.id, task.definition.id);
       }
-      const launch = attempt.launchManifest || buildLaunch(task.definition, attempt.directory);
       await this.herdr.startAgent(run.herdrSession, attempt.workerName, launch.kind, pane.pane_id, launch.args);
       await this._captureIdentity(run.id, task.definition.id);
       await this._cancelCheck(run.id, task.definition.id);
@@ -287,10 +301,10 @@ export class Orchestrator {
 
   async _releaseRuntime(runId, taskId, attemptId) {
     const { attempt } = await this._attempt(runId, taskId);
-    if (!attempt.execution || attempt.runtimeReleasedAt) return;
+    if ((!attempt.execution && !attempt.telemetry) || attempt.runtimeReleasedAt) return;
     invariant(attempt.id === attemptId && attempt.workerClosed, 'worker_not_stopped', 'Stop the worker before releasing its execution resources.');
     try {
-      const gatewayId = attempt.execution.gateway?.id || attempt.execution.gatewayId;
+      const gatewayId = attempt.execution?.gateway?.id || attempt.execution?.gatewayId;
       if (gatewayId) {
         const deadline = Date.now() + 5000;
         while (true) {
@@ -299,8 +313,24 @@ export class Orchestrator {
         }
       }
       const resources = await cleanupExecution(attempt.launchManifest);
-      for (const reservation of attempt.execution.reservations) await releaseExecution(this.root, reservation);
-      await this._update(runId, taskId, attemptId, a => { a.runtimeReleasedAt = time(); a.executionCleanup = resources; delete a.runtimeCleanupError; });
+      const telemetryResources = { removed: [], retained: [] };
+      if (attempt.telemetry?.enabled) {
+        const expected = path.join(this.root, 'monitor', 'claude', runId, taskId, attemptId);
+        invariant(attempt.telemetry.directory === expected, 'telemetry_owner_changed', 'Telemetry directory ownership changed.');
+        const directory = await fs.lstat(expected);
+        invariant(directory.isDirectory() && !directory.isSymbolicLink() && inside(this.root, await fs.realpath(expected)), 'telemetry_owner_changed', 'Telemetry directory was replaced.');
+        for (const file of attempt.telemetry.files || []) {
+          if (file.path === attempt.telemetry.eventsFile) { telemetryResources.retained.push(file.path); continue; }
+          invariant(path.dirname(file.path) === expected, 'telemetry_path_invalid', 'Telemetry resource is outside its owned directory.');
+          try {
+            const info = await fs.lstat(file.path);
+            if (info.isFile() && !info.isSymbolicLink() && await hashFile(file.path) === file.sha256) { await fs.unlink(file.path); telemetryResources.removed.push(file.path); }
+            else telemetryResources.retained.push(file.path);
+          } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        }
+      }
+      for (const reservation of attempt.execution?.reservations || []) await releaseExecution(this.root, reservation);
+      await this._update(runId, taskId, attemptId, a => { a.runtimeReleasedAt = time(); a.executionCleanup = resources; a.telemetryCleanup = telemetryResources; delete a.runtimeCleanupError; });
     } catch (error) {
       await this._update(runId, taskId, attemptId, a => { a.runtimeCleanupError = serializeError(error); });
       throw error;

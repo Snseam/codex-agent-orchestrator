@@ -2,7 +2,7 @@
 
 > English: [../architecture.md](../architecture.md)
 
-CAO 是一个显式驱动的 CLI 控制器。它不常驻后台，没有 daemon 或 MCP 原生 children 监测，不接管 provider 配置，不自动安装插件，也不自动 commit/push。执行类命令读取状态、执行一个阶段、写回证据并退出；只读查询检查状态或本地用量记录。
+CAO 是一个显式驱动的 CLI 控制器。它不是后台编排 daemon，不接管 provider 配置，不自动安装插件，也不自动 commit/push。执行类命令读取状态、执行一个阶段、写回证据并退出；只读查询检查状态、本地用量记录或 monitor metadata。Agent Monitor 可以观察部分本地 CAO/Codex/Claude metadata，但观察能力取决于数据源，它不是原生 child agent 控制平面。
 
 ## 运行边界
 
@@ -15,13 +15,15 @@ CAO 是一个显式驱动的 CLI 控制器。它不常驻后台，没有 daemon 
           -> Herdr runtime
               -> claude | pi | opencode | codex
           -> verification commands
+          -> optional local Agent Monitor
+              -> CAO state + Codex app-server/SQLite + Claude hook/local metadata
 ```
 
 CAO 只管理自己创建的 run、attempt、Herdr session、workspace/pane 和证据文件。agent 自身的模型、账号、provider、权限、原生子代理能力和本地配置由对应工具负责。
 
 ## 入口层：`bin/cao.mjs`
 
-CLI 负责参数解析、读取任务文件、创建 `Orchestrator` 和输出 JSON。run 阶段命令包括：`init`、`validate`、`dispatch`、`status`、`inspect`、`collect`、`verify`、`retry`、`resume`、`input`、`integrate`、`recover`、`cancel`、`cleanup`、`doctor`、`usage`。Profiled execution 还增加 `source discover`、`profile ...`、`secret ...`、`route ...` 和 `gateway ...` 命令。
+CLI 负责参数解析、读取任务文件、创建 `Orchestrator` 和输出 JSON。run 阶段命令包括：`init`、`validate`、`dispatch`、`status`、`inspect`、`collect`、`verify`、`retry`、`resume`、`input`、`integrate`、`recover`、`cancel`、`cleanup`、`doctor`、`usage`。Profiled execution 还增加 `source discover`、`profile ...`、`secret ...`、`route ...` 和 `gateway ...` 命令。本地监控增加 `monitor start`、`monitor status`、`monitor stop` 和 `monitor snapshot`。
 
 重要语义：
 
@@ -30,6 +32,8 @@ CLI 负责参数解析、读取任务文件、创建 `Orchestrator` 和输出 JS
 - `verify` 验证已收集候选，不向 agent 继续发任务。
 - `integrate` 应用已验收 patch 并在目标项目复验。
 - `recover` 只复验已保留在 checkout 中的恢复场景：incomplete integration 不再次 apply patch；stopped checkout 任务按当前 checkout 重新验收。
+- `monitor start --project <path> --open` 启动 localhost 只读看板。省略 `--project` 时，CLI 使用当前工作目录的 Git root。`--run` 限定到一个 CAO run；`--all` 必须显式指定，并且与 `--project`、`--run` 互斥。
+- `monitor status`、`monitor stop` 和 `monitor snapshot` 用于查看或停止 monitor server。停止 monitor 不会停止 agent。`--id` 选择命名 monitor，`--port` 指定或自动分配 localhost 端口。
 
 ## 执行 Profile 层：`src/profiles.mjs`、`src/routing.mjs`、`src/gateway/*`、`src/execution-config.mjs`
 
@@ -57,6 +61,19 @@ Orchestrator 是状态机和流程协调层。
 - `integrate`：对 accepted worktree attempt 应用 patch 到目标项目，并重新运行 checks；失败或取消会形成跨 run hold，直到 recover 通过。
 - `recover`：对 integration hold 复验当前 checkout，不再次 apply patch；对已停止的 failed/rework/interrupted/cancelled checkout 任务，按当前 checkout 重新进入 verify。
 - `cancel`/`cleanup`：关闭 worker 或停止 CAO session；证据与工作树保留。checkout cancel 无改动时释放 checkout hold；cleanup 关闭 run 的新 dispatch，但不清除 hold。
+
+
+## Agent Monitor：`src/monitor/*`
+
+Agent Monitor 是一个本地只读状态界面，用于查看 CAO 项目和相关原生 agent metadata。默认 scope 是当前 CAO 项目：`monitor start --open` 会把当前工作目录解析为 Git root，并展示匹配的 CAO run，以及可关联的 Codex/Claude children。`monitor start --run <runId>` 缩小到单个 run；`monitor start --all` 是显式的整机视图。三种 scope 互斥。`--codex-home` 和 `--claude-home` 指向对应工具的配置根，不是项目目录。旧版或跨目录 Codex coordinator thread 需要关联时，可以显式传 `--coordinator`。Monitor 使用与 run 命令相同的 CAO state directory。
+
+Monitor server 绑定 `127.0.0.1`，并返回类似 `http://127.0.0.1:<port>/#token=...` 的 token URL。浏览器把 fragment token 放入 `sessionStorage`；API 请求用 bearer token，因此 token 不写入 CAO state。Host/origin 检查会拒绝非本地访问。UI 只显示 metadata，没有执行、prompt、input、cancel 或 stop-agent 控件。`monitor stop` 只停止本地 monitor server。
+
+Monitor 状态与 CAO 交付状态不是同一件事。CAO `accepted` 表示 CAO 已独立验收候选；原生 Codex/Claude 的 `finished`、`idle` 或 `completed` 只表示原生 agent 当前没有活动工作，不表示 CAO 已接受 patch。Snapshot 会带 source freshness，例如 live、observed、unknown 或 stale，方便区分已连接数据、本地历史和 fallback metadata。
+
+CAO 管理的 Claude attempt 可以注入私有 hook settings，用于报告经过清洗的生命周期 metadata。旧版单个 `--settings` 启动可以合并；`disableAllHooks`、`--bare`、多个 settings 文件或不安全 settings 路径会降级为较低置信度 metadata，而不是强行启用 telemetry。已有或非 CAO 管理的 Claude session 仍可通过本地 metadata fallback 观察，但置信度较低。Hook 路径记录 `SubagentStart -> running -> SubagentStop -> completed` 这类生命周期字段；不保存 prompt、tool input、tool output、回复或任意 hook payload。删除生成的 settings 会阻止之后的 hook 事件，已有 CAO event 证据仍保留。
+
+Codex 观察优先使用本地 app-server proxy。当前本机 app-server 行为下 proxy 路径不可用，因此 CAO 会退回只读 SQLite 观察，读取 `thread_history_1` 和 `state_5`。这个 fallback 对 coordinator/thread metadata 有用，但不能承诺完整或完全实时覆盖。原生 CLI 的 trust 文件、history 文件和 provider 行为仍是工具自身的正常行为；CAO 为 monitor 不修改全局 provider 文件。操作命令和数据源限制见 [Agent Monitor](monitor.md)。
 
 ## 状态层：`src/state.mjs`
 
@@ -94,7 +111,7 @@ Orchestrator 是状态机和流程协调层。
 - `claude`：Herdr kind 为 `claude`，启动参数会先加 `--add-dir <attemptDirectory>`，再追加 `agentArgs`。
 - `pi`、`opencode`、`codex`：按 `agentArgs` 原样传给 Herdr `agent start`。
 
-`maxChildren` 是报告契约。CAO 只验证 result JSON 中 `children.length <= maxChildren` 和 child 状态字段，不监控真实原生 child/subagent 数量，没有 MCP/daemon telemetry，也不保证它们已停止。Profiled 模式通过 `src/execution-config.mjs` 增加临时原生配置；详见[执行配置](execution-profiles.md)。
+`maxChildren` 是报告契约。CAO 只验证 result JSON 中 `children.length <= maxChildren` 和 child 状态字段，不硬性限制原生 child、provider 侧 API 并发或单个原生 agent 内的后台工作。Agent Monitor 可以展示部分 CAO 管理或本地观察到的 Codex/Claude child metadata，但这不是 enforcement，也不是完整性保证。Profiled 模式通过 `src/execution-config.mjs` 增加临时原生配置；详见[执行配置](execution-profiles.md)。
 
 ## Herdr runtime：`src/runtime/herdr.mjs`
 
@@ -130,7 +147,7 @@ checks 使用 argv 数组直接 spawn，不走 shell。每个 check 在候选 cw
 
 ## 当前验证证据
 
-基础流程有本地测试和 Claude Code 真实场景覆盖。Profiled execution 已用 Herdr 0.9+、两个 Claude session 和本地模拟 Anthropic API 做过冒烟检查：两个 profile 使用不同模型和 key，完成 Read/Write/Bash/工具结果提交，两个候选独立 accepted，16 个 gateway 请求符合预期，全局 provider 文件未变化，并完成 runtime 释放。这是本地编排集成证据，不是真实模型质量或计费证据。
+基础流程有本地测试和 Claude Code 真实场景覆盖。Profiled execution 已用 Herdr 0.9+、两个 Claude session 和本地模拟 Anthropic API 做过冒烟检查：两个 profile 使用不同模型和 key，完成 Read/Write/Bash/工具结果提交，两个候选独立 accepted，16 个 gateway 请求符合预期，全局 provider 文件未变化，并完成 runtime 释放。Monitor 证据包括一个 CAO 管理的 Claude Explore child 上报 `SubagentStart -> running -> SubagentStop -> completed`；独立验收和 integration 通过，删除生成 settings 后不再产生后续 hook 事件，已有 CAO event 证据保留。这是本地编排与 metadata 捕获的集成证据，不是真实模型质量、计费或完整 UI 覆盖证据。
 
 ## Token 查询：`src/usage.mjs`、`src/runtime/tokscale.mjs`
 

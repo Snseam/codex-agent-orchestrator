@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execPath } from 'node:process';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,25 +54,27 @@ test('runCommand rejects on timeout after cleaning up the owned process', async 
 test('runCommand timeout kills a grandchild that ignores TERM and holds stdout open', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cao-timeout-'));
   const pidFile = join(directory, 'child.pid');
+  let pid, rejection;
   try {
     const shellCode = `trap '' TERM; echo $$ > ${JSON.stringify(pidFile)}; while :; do printf x; sleep 0.01; done`;
     const leaderCode = `trap 'exit 0' TERM; /bin/sh -c ${shellQuote(shellCode)} & wait`;
     const started = Date.now();
     const promise = runCommand(['/bin/sh', '-c', leaderCode], { timeoutMs: 2000, maxBytes: 128 });
-    const rejection = assert.rejects(
+    rejection = assert.rejects(
       promise,
       (error) => error instanceof OrchestratorError && error.code === 'command_timeout',
     );
-    while (!existsSync(pidFile) && Date.now() - started < 1500) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.ok(existsSync(pidFile), 'child process should start within the test startup budget before timeout');
-    const pid = Number(readFileSync(pidFile, 'utf8'));
-    assert.equal(processExists(pid), true, 'grandchild should be running before timeout');
+    const pidState = await waitForPidFile(pidFile, 1500, 'child process should start within the test startup budget before timeout');
+    pid = pidState.pid;
+    assert.equal(processExists(pid, pidFile), true, `grandchild should be running before timeout; raw pidFile content: ${JSON.stringify(pidState.raw)}; ps: ${JSON.stringify(processState(pid))}`);
     await rejection;
     assert.ok(Date.now() - started < 4500, 'timeout cleanup should not hang on grandchild stdout');
-    assert.equal(await waitForProcessExit(pid), true, 'timed out command should not leave child process running');
+    assert.equal(await waitForProcessExit(pid, 2500, pidFile), true, 'timed out command should not leave child process running');
   } finally {
+    if (rejection) await rejection.catch(() => {});
+    if (pid && processExists(pid, pidFile)) {
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -85,31 +88,61 @@ test('runCommand rejects pre-aborted signals without spawning', async () => {
   );
 });
 
-function processExists(pid) {
+function processState(pid) {
   try {
-    process.kill(pid, 0);
-    return true;
+    const output = execFileSync('ps', ['-ww', '-o', 'stat=,command=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    if (!output) return null;
+    const [stat, ...command] = output.split(/\s+/);
+    return { stat, command: command.join(' ') };
   } catch {
-    return false;
+    return null;
   }
 }
 
-async function waitForProcessExit(pid, timeoutMs = 2500) {
+function processExists(pid, commandNeedle = null) {
+  const state = processState(pid);
+  if (!state || state.stat.startsWith('Z')) return false;
+  return !commandNeedle || state.command.includes(commandNeedle);
+}
+
+async function waitForProcessExit(pid, timeoutMs = 2500, commandNeedle = null) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    if (!processExists(pid)) return true;
+    if (!processExists(pid, commandNeedle)) return true;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return !processExists(pid);
+  return !processExists(pid, commandNeedle);
 }
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
+function pidFileState(pidFile) {
+  if (!existsSync(pidFile)) return { raw: null, pid: null };
+  const raw = readFileSync(pidFile, 'utf8');
+  const trimmed = raw.trim();
+  const pid = /^[1-9]\d*$/.test(trimmed) ? Number(trimmed) : null;
+  return { raw, pid: Number.isSafeInteger(pid) ? pid : null };
+}
+
+async function waitForPidFile(pidFile, timeoutMs, label) {
+  const started = Date.now();
+  let state = pidFileState(pidFile);
+  while (!state.pid && Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    state = pidFileState(pidFile);
+  }
+  if (!state.pid) {
+    assert.fail(`${label}; raw pidFile content: ${state.raw === null ? '<missing>' : JSON.stringify(state.raw)}`);
+  }
+  return state;
+}
+
 test('runCommand abort kills a grandchild that ignores TERM and holds stdout open', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cao-abort-'));
   const pidFile = join(directory, 'child.pid');
+  let controller, promise, pid;
   try {
     const childCode = `
       process.on("SIGTERM", () => {});
@@ -125,24 +158,69 @@ test('runCommand abort kills a grandchild that ignores TERM and holds stdout ope
       child.stdout.pipe(process.stdout);
       setInterval(() => {}, 1000);
     `;
-    const controller = new AbortController();
-    const promise = runCommand([execPath, '-e', script], { signal: controller.signal, timeoutMs: 0, maxBytes: 128 });
-    const started = Date.now();
-    while (!existsSync(pidFile) && Date.now() - started < 1000) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.ok(existsSync(pidFile), 'child process should have started before abort');
-    const pid = Number(readFileSync(pidFile, 'utf8'));
+    controller = new AbortController();
+    promise = runCommand([execPath, '-e', script], { signal: controller.signal, timeoutMs: 0, maxBytes: 128 });
+    const pidState = await waitForPidFile(pidFile, 1500, 'child process should have started before abort');
+    pid = pidState.pid;
     controller.abort();
     await assert.rejects(
       promise,
       (error) => error instanceof OrchestratorError && error.code === 'command_cancelled',
     );
-    assert.equal(await waitForProcessExit(pid), true, 'aborted command should not leave child process running');
+    assert.equal(await waitForProcessExit(pid, 2500, pidFile), true, 'aborted command should not leave child process running');
   } finally {
+    if (controller && !controller.signal.aborted) controller.abort();
+    if (promise) await promise.catch(() => {});
+    if (pid && processExists(pid, pidFile)) {
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+
+test('runCommand waits for abort escalation before rejecting when grandchild ignores TERM without holding stdout open', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cao-abort-detached-stdout-'));
+  const pidFile = join(directory, 'child.pid');
+  let controller, promise, pid;
+  try {
+    const childCode = `
+      process.on("SIGTERM", () => {});
+      process.stdout.on("error", () => {});
+      require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      setInterval(() => { try { process.stdout.write("x"); } catch {} }, 10);
+      setInterval(() => {}, 1000);
+    `;
+    const script = `
+      const { spawn } = require('node:child_process');
+      process.on('SIGTERM', () => process.exit(0));
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], {
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      child.stdout.pipe(process.stdout);
+      setInterval(() => {}, 1000);
+    `;
+    controller = new AbortController();
+    promise = runCommand([execPath, '-e', script], { signal: controller.signal, timeoutMs: 0, maxBytes: 128 });
+    const pidState = await waitForPidFile(pidFile, 1500, 'child process should have started before abort');
+    pid = pidState.pid;
+    assert.equal(processExists(pid, pidFile), true, `grandchild should be running before abort; raw pidFile content: ${JSON.stringify(pidState.raw)}; ps: ${JSON.stringify(processState(pid))}`);
+    controller.abort();
+    await assert.rejects(
+      promise,
+      (error) => error instanceof OrchestratorError && error.code === 'command_cancelled',
+    );
+    assert.equal(await waitForProcessExit(pid, 1000, pidFile), true, 'abort rejection should happen only after cleanup escalation can kill the orphaned grandchild');
+  } finally {
+    if (controller && !controller.signal.aborted) controller.abort();
+    if (promise) await promise.catch(() => {});
+    if (pid && processExists(pid, pidFile)) {
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 
 test('runCommand rejects invalid argv', async () => {
   await assert.rejects(

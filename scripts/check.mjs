@@ -10,5 +10,5 @@ async function check(directory) {
     else if (file.endsWith('.mjs')) { execFileSync(process.execPath, ['--check', file]); count++; }
   }
 }
-for (const directory of ['src', 'bin', 'scripts', 'tests']) await check(directory);
+for (const directory of ['src', 'bin', 'scripts', 'tests', 'web']) await check(directory);
 console.log(`Syntax checks passed for ${count} modules.`);

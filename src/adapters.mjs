@@ -1,7 +1,7 @@
 export const capabilities = {
   claude: {
     herdrKind: 'claude',
-    nativeDelegation: 'available when Claude Code Agent/subagent/team tooling is enabled; not observed or enforced by CAO',
+    nativeDelegation: 'available when native tooling is enabled; private hooks can observe lifecycle metadata, while native execution and concurrency remain agent-owned',
     maxChildren: 'reported in prompt contract only',
   },
   pi: {
@@ -16,7 +16,7 @@ export const capabilities = {
   },
   codex: {
     herdrKind: 'codex',
-    nativeDelegation: 'Codex-internal delegation is not observed or enforced by CAO',
+    nativeDelegation: 'local Codex lifecycle metadata can be observed where supported; live coverage varies and native delegation is not controlled by CAO',
     maxChildren: 'reported in prompt contract only',
   },
 };

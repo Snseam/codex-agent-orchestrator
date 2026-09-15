@@ -2,7 +2,7 @@
 
 > 中文: [zh-CN/architecture.md](zh-CN/architecture.md)
 
-Codex Agent Orchestrator (CAO) is an explicit CLI controller. It is not a daemon, does not provide MCP-native child telemetry, does not change model/provider settings, does not install plugins, and does not commit or push. Execution commands load state, perform a stage, write evidence, and exit. Read-only queries inspect state or local usage records.
+Codex Agent Orchestrator (CAO) is an explicit CLI controller. It is not a background orchestration daemon, does not change model/provider settings, does not install plugins, and does not commit or push. Execution commands load state, perform a stage, write evidence, and exit. Read-only queries inspect state, local usage records, or monitor metadata. The Agent Monitor can observe selected local CAO/Codex/Claude metadata, but that observation is source-dependent and is not a native control plane for child agents.
 
 ## Runtime boundary
 
@@ -15,13 +15,15 @@ User / Codex App
           -> Herdr runtime
               -> claude | pi | opencode | codex
           -> verification commands
+          -> optional local Agent Monitor
+              -> CAO state + Codex app-server/SQLite + Claude hook/local metadata
 ```
 
 CAO owns only the runs, attempts, Herdr session, workspaces/panes, and evidence it creates. Agent accounts, models, provider configuration, native delegation features, and local permissions remain owned by the corresponding tool installation.
 
 ## CLI layer: `bin/cao.mjs`
 
-The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported run stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, `doctor`, and `usage`. Profiled execution adds `source discover`, `profile ...`, `secret ...`, `route ...`, and `gateway ...` commands.
+The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported run stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, `doctor`, and `usage`. Profiled execution adds `source discover`, `profile ...`, `secret ...`, `route ...`, and `gateway ...` commands. Local monitoring adds `monitor start`, `monitor status`, `monitor stop`, and `monitor snapshot`.
 
 Key semantics:
 
@@ -30,6 +32,8 @@ Key semantics:
 - `verify` checks an already collected candidate; it does not continue the worker conversation.
 - `integrate` applies a verified worktree patch to the target checkout and reruns checks there.
 - `recover` rechecks retained checkout state. It does not rerun a worker and does not apply the same patch again.
+- `monitor start --project <path> --open` starts a localhost, read-only dashboard. If `--project` is omitted, the CLI uses the current working directory's Git root. `--run` scopes the view to one CAO run. `--all` is explicit and mutually exclusive with `--project` and `--run`.
+- `monitor status`, `monitor stop`, and `monitor snapshot` inspect or stop the monitor server. Stopping the monitor does not stop agents. `--id` selects a named monitor, and `--port` selects or auto-allocates the localhost port.
 
 ## Execution profile layer: `src/profiles.mjs`, `src/routing.mjs`, `src/gateway/*`, `src/execution-config.mjs`
 
@@ -58,6 +62,19 @@ The orchestrator is the state machine and coordination layer.
 - `recover` rechecks current checkout state: incomplete integrations are verified without applying the patch again; stopped checkout tasks are moved back through verification using the current checkout.
 - `cancel` closes the owned worker when identity still matches. Checkout cancellation releases the checkout hold only when there are no changes relative to that task baseline.
 - `cleanup` stops the run's Herdr server and closes the run for future dispatch. It retains worktrees, evidence, and any checkout/integration holds.
+
+
+## Agent Monitor: `src/monitor/*`
+
+The Agent Monitor is a local read-only status surface for CAO projects and related native agent metadata. The default scope is the current CAO project: `monitor start --open` resolves the current working directory to its Git root and shows matching CAO runs plus associated Codex/Claude children when they can be linked. `monitor start --run <runId>` narrows the scope to one run, while `monitor start --all` is an explicit machine-wide view. The three scope forms are intentionally exclusive. `--codex-home` and `--claude-home` point at the corresponding configuration roots, not project directories. `--coordinator` can be supplied when an older or cross-directory Codex coordinator thread should be associated with the project. All monitor state uses the same CAO state directory as the run commands.
+
+The monitor server binds to `127.0.0.1` and serves a tokenized URL such as `http://127.0.0.1:<port>/#token=...`. The browser stores that fragment token in `sessionStorage`; API calls use it as a bearer token, so the token is not persisted in CAO state. Host/origin checks reject non-local access. The UI exposes metadata only and has no execute, prompt, input, cancel, or stop-agent controls. `monitor stop` stops only the local monitor server.
+
+Monitor status is deliberately different from CAO delivery state. CAO `accepted` means CAO independently verified and accepted the candidate. Native Codex/Claude `finished`, `idle`, or `completed` means the native agent reports no active work, not that CAO accepted its patch. Snapshot records include source freshness such as live, observed, unknown, or stale so callers can distinguish connected data from local history and fallback metadata.
+
+CAO-managed Claude attempts can receive private hook settings that report sanitized lifecycle metadata. Legacy single `--settings` launches may be merged; `disableAllHooks`, `--bare`, multiple settings files, or unsafe settings paths degrade to lower-confidence metadata instead of forcing telemetry. Existing or unmanaged Claude sessions can still be observed through local metadata fallback, but confidence is lower. The hook path records lifecycle fields such as `SubagentStart -> running -> SubagentStop -> completed`; it does not store prompts, tool inputs, tool outputs, replies, or arbitrary hook payloads. Removing generated settings prevents future hook events while existing CAO event records remain.
+
+Codex observation prefers the local app-server proxy when available. On the current local app-server behavior, the proxy path is not available, so CAO falls back to read-only SQLite observation from `thread_history_1` and `state_5`. That fallback is useful for coordinator/thread metadata, but it should not be documented as complete or fully real-time coverage. Native CLI trust files, history files, and provider behavior remain normal native-tool behavior; CAO does not mutate global provider files for monitoring. See [Agent Monitor](monitor.md) for operator commands and source limitations.
 
 ## State store: `src/state.mjs`
 
@@ -93,7 +110,7 @@ In inherited mode, adapters preserve provider settings:
 - `claude` starts Herdr kind `claude` and prepends `--add-dir <attemptDirectory>` before task `agentArgs`.
 - `pi`, `opencode`, and `codex` pass task `agentArgs` through unchanged to Herdr `agent start`.
 
-`maxChildren` is a reporting contract only. CAO validates the number and status values in result JSON; it does not observe or enforce native children/subagents and has no MCP/daemon child telemetry. Profiled mode adds temporary native configuration through `src/execution-config.mjs`; see [execution profiles](execution-profiles.md).
+`maxChildren` is a reporting contract only. CAO validates the number and status values in result JSON; it does not hard-cap native children, provider-side API concurrency, or background work inside a native agent. The Agent Monitor can show selected metadata for some CAO-managed or locally observed Codex/Claude children, but this is not enforcement and is not a completeness guarantee. Profiled mode adds temporary native configuration through `src/execution-config.mjs`; see [execution profiles](execution-profiles.md).
 
 ## Herdr runtime: `src/runtime/herdr.mjs`
 
@@ -131,7 +148,7 @@ Verification commands are expected not to edit source files. `verify` and `integ
 
 ## Current validation evidence
 
-The base workflow has local tests and Claude Code live-scenario coverage. Profiled execution has been smoke-checked with Herdr 0.9+ using two Claude sessions against a local simulated Anthropic API: two profiles with separate models and keys completed Read/Write/Bash/tool-result submission, both candidates were independently accepted, 16 gateway requests matched expectations, global provider files stayed unchanged, and runtime resources were released. This is integration evidence for local orchestration, not real model-quality or billing evidence.
+The base workflow has local tests and Claude Code live-scenario coverage. Profiled execution has been smoke-checked with Herdr 0.9+ using two Claude sessions against a local simulated Anthropic API: two profiles with separate models and keys completed Read/Write/Bash/tool-result submission, both candidates were independently accepted, 16 gateway requests matched expectations, global provider files stayed unchanged, and runtime resources were released. Monitor evidence includes a CAO-managed Claude Explore child reporting `SubagentStart -> running -> SubagentStop -> completed`; independent acceptance and integration passed, and deleting generated settings prevented future hook events while retaining existing CAO event evidence. This is integration evidence for local orchestration and metadata capture, not real model-quality, billing, or exhaustive UI coverage evidence.
 
 ## Token usage: `src/usage.mjs`, `src/runtime/tokscale.mjs`
 

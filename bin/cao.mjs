@@ -14,6 +14,9 @@ import { ProfileStore } from '../src/profiles.mjs';
 import { discoverCCSwitch, importCCSwitchProfile } from '../src/config-sources/cc-switch.mjs';
 import { explainRoute, listReservations } from '../src/routing.mjs';
 import { GatewayManager } from '../src/gateway/manager.mjs';
+import { MonitorManager, openMonitor } from '../src/monitor/manager.mjs';
+import { loadRun } from '../src/state.mjs';
+import { getProjectInfo } from '../src/git.mjs';
 
 export const help = `Codex Agent Orchestrator (CAO) 0.1.0
 
@@ -37,6 +40,12 @@ Usage: node bin/cao.mjs <command> [options]
              [--today | --since YYYY-MM-DD --until YYYY-MM-DD]
              [--run ID [--task ID]] [--home PATH] [--tokscale-bin PATH] [--table]
   doctor
+
+  monitor start [--project PATH | --run ID | --all] [--open] [--id NAME] [--port 0]
+  monitor status [--id NAME]
+  monitor stop [--id NAME]
+  monitor snapshot [--project PATH | --run ID | --all]
+             [--coordinator CODEX_THREAD_ID] [--codex-home PATH] [--claude-home PATH]
 
   source discover [--directory CC_SWITCH_DIRECTORY]
   profile list
@@ -64,6 +73,7 @@ dispatch submits once; collect waits without resubmitting.
 verify checks a stopped candidate; integrate applies and rechecks it.
 usage queries local token records through optional Tokscale; scoped attribution is workspace-based.
 Profiled tasks use isolated runtime settings; existing global provider files are not rewritten.
+monitor serves an authenticated, localhost-only status page; stopping it never stops agents.
 No automatic commits, pushes, or plugin installation.
 `;
 
@@ -81,8 +91,11 @@ const optionsByCommand = {
   'profile refresh': ['id', 'model'], 'secret set': ['id', 'stdin'], 'secret remove': ['id'],
   'route explain': ['file'], 'route reservations': [],
   'gateway start': ['profile', 'id', 'allow-shared'], 'gateway status': ['id'], 'gateway stop': ['id'], 'gateway list': [],
+  'monitor start': ['project', 'run', 'all', 'open', 'id', 'port', 'coordinator', 'codex-home', 'claude-home'],
+  'monitor status': ['id'], 'monitor stop': ['id'],
+  'monitor snapshot': ['project', 'run', 'all', 'coordinator', 'codex-home', 'claude-home'],
 };
-const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway']);
+const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor']);
 
 export function parseArgs(argv) {
   const values = {};
@@ -96,7 +109,7 @@ export function parseArgs(argv) {
     }
     const [name, ...inlineParts] = token.slice(2).split('=');
     if (Object.hasOwn(values, name)) throw new OrchestratorError('invalid_arguments', `Duplicate option: --${name}`);
-    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin'].includes(name)) {
+    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open'].includes(name)) {
       if (inlineParts.length) throw new OrchestratorError('invalid_arguments', `--${name} takes no value`);
       values[name] = true;
     } else {
@@ -128,7 +141,29 @@ export async function main(argv = process.argv.slice(2)) {
   };
   const orchestrator = new Orchestrator({ stateRoot: o['state-dir'], herdr: new Herdr({ binary: process.env.CAO_HERDR_BIN || 'herdr' }) });
   const taskArgs = () => [required('run'), required('task')];
+  const monitorScope = async () => {
+    if (o.all && (o.project || o.run)) throw new OrchestratorError('invalid_arguments', '--all cannot be combined with --project or --run.');
+    let project = o.project ? await fs.realpath(path.resolve(o.project)) : null;
+    if (o.run) {
+      const run = await loadRun(profiles.root, o.run);
+      if (!run) throw new OrchestratorError('run_not_found', 'Monitor run does not exist in this state directory.');
+      if (project && project !== run.project) throw new OrchestratorError('monitor_scope_mismatch', 'Project does not match the selected run.');
+      project = run.project;
+    }
+    if (!o.all && !project) project = (await getProjectInfo(process.cwd())).root;
+    return { project, runId: o.run || null, all: !!o.all, coordinatorId: o.coordinator || (o.run ? null : process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null), coordinatorExplicit: Boolean(o.coordinator), codexHome: o['codex-home'], claudeHome: o['claude-home'] };
+  };
   switch (command) {
+    case 'monitor start': {
+      const monitor = await new MonitorManager({ root: profiles.root }).start({ ...await monitorScope(), id: o.id || 'default', port: o.port === undefined ? 0 : Number(o.port) });
+      return { ...monitor, browserOpened: o.open ? await openMonitor(monitor.url) : false };
+    }
+    case 'monitor status': return new MonitorManager({ root: profiles.root }).status(o.id || 'default');
+    case 'monitor stop': return new MonitorManager({ root: profiles.root }).stop(o.id || 'default');
+    case 'monitor snapshot': {
+      const { MonitorCollector } = await import('../src/monitor/collector.mjs');
+      return new MonitorCollector({ root: profiles.root, ...await monitorScope() }).snapshot();
+    }
     case 'source discover': return discoverCCSwitch({ directory: o.directory });
     case 'profile list': return { profiles: await profiles.list(), defaultProfileId: (await profiles.getDefault())?.id || null };
     case 'profile show': {

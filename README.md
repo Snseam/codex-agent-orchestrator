@@ -205,6 +205,30 @@ Routing supports fixed profiles and automatic `agent: "auto"` selection. A defau
 
 The first CC Switch source adapter targets schema version 18 and supports direct Claude API records from `settings_config.env` plus explicit `--allow-shared` reuse of the active Claude proxy. OAuth-only and non-Claude records are listed as unsupported rather than imported as direct profiles. See [execution profiles and routing](docs/execution-profiles.md).
 
+## Agent Monitor
+
+Agent Monitor is a local, read-only status page for CAO runs and related Codex/Claude children. From a project checkout, start it with:
+
+```bash
+node bin/cao.mjs monitor start --open
+```
+
+Or ask Codex:
+
+```text
+打开当前项目Agent看板
+```
+
+When `--project`, `--run`, and `--all` are omitted, the CLI uses the current directory's Git root. The page is localhost-only, uses a URL fragment token that the browser stores in `sessionStorage`, and exposes metadata only. It does not execute commands, send input, cancel tasks, stop agents, or display prompts/tool inputs/tool outputs/model replies. `monitor stop` stops only the monitor server.
+
+The monitor distinguishes CAO delivery from native runtime state: a native child can be idle or finished without the CAO attempt being `accepted`. Codex metadata prefers app-server proxy and currently falls back to local SQLite metadata when proxy is unavailable; Claude child state is strongest for new CAO-managed attempts with private hooks and lower confidence for unmanaged local fallback. The page also has a Project view and Conversation view, and can show per-agent token metadata when native records provide it; token rows are usage observations, not plan balance, billing truth, or exact task cost. See [Local Agent Monitor](docs/monitor.md).
+
+To inspect the current conversation view with token columns, you can ask Codex:
+
+```text
+打开当前项目Agent看板，切到当前对话并显示每个Agent Token
+```
+
 ## Agent support
 
 | Agent | Task value | Current validation |
@@ -229,7 +253,7 @@ Use `--tokscale-bin /path/to/tokscale` or `CAO_TOKSCALE_BIN=/path/to/tokscale` w
 
 ## Verification and boundaries
 
-- CAO is explicitly driven by its caller; it has no background scheduler, MCP server, or native subagent telemetry.
+- CAO is explicitly driven by its caller; it has no background scheduler or MCP server. The local Agent Monitor can observe selected native metadata, but coverage is source-dependent and not a hard native-child telemetry guarantee.
 - Worktrees and `allowedPaths` are coordination controls, not a filesystem sandbox. Ignored untracked files and external side effects are outside the Git snapshot.
 - Failed integration can leave edits in the project. CAO blocks new work for that project until recovery succeeds; `recover` rechecks the current checkout without applying the patch again.
 - Direct `checkout` tasks can retain unverified edits too. Retry that task or recover after its worker stops. Shared project locks require one state directory.
@@ -255,6 +279,7 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 | --- | --- |
 | [Architecture](docs/architecture.md) | CLI, state store, Herdr runtime, Git isolation, verification, profiled execution |
 | [Execution profiles and routing](docs/execution-profiles.md) | Profile CRUD, secrets, CC Switch import, routing, gateway lifecycle |
+| [Local Agent Monitor](docs/monitor.md) | Read-only local dashboard for CAO, Codex, and Claude metadata |
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
 | [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
 | [Codex skill draft](skills/herdr-dev/SKILL.md) | Guidance for driving CAO from Codex; not installed automatically |
