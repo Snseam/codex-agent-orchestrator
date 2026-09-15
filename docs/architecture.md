@@ -2,7 +2,7 @@
 
 > 中文: [zh-CN/architecture.md](zh-CN/architecture.md)
 
-Codex Agent Orchestrator (CAO) is an explicit CLI controller. It is not a daemon, does not provide MCP-native child telemetry, does not change model/provider settings, does not install plugins, and does not commit or push. Each command loads state, performs one stage, writes evidence, and exits.
+Codex Agent Orchestrator (CAO) is an explicit CLI controller. It is not a daemon, does not provide MCP-native child telemetry, does not change model/provider settings, does not install plugins, and does not commit or push. Execution commands load state, perform a stage, write evidence, and exit. Read-only queries inspect state or local usage records.
 
 ## Runtime boundary
 
@@ -21,7 +21,7 @@ CAO owns only the runs, attempts, Herdr session, workspaces/panes, and evidence 
 
 ## CLI layer: `bin/cao.mjs`
 
-The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, and `doctor`.
+The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, `doctor`, and `usage`.
 
 Key semantics:
 
@@ -114,3 +114,7 @@ Untracked ignored files are not part of snapshots, changed paths, candidate patc
 Checks are spawned from argv arrays, never through a shell. Each check runs in either the candidate cwd or the target project cwd and observes its own `timeoutMs`. Timeout or cancellation kills the process group CAO started. Captured output is bounded and written into evidence JSON.
 
 Verification commands are expected not to edit source files. `verify` and `integrate` compare snapshots before and after checks; if checks mutate source state, the attempt fails or remains held for recovery.
+
+## Token usage: `src/usage.mjs`, `src/runtime/tokscale.mjs`
+
+`UsageService` queries an optional external Tokscale CLI and leaves the CAO ledger unchanged. The adapter validates version, grouping, numeric fields, and aggregate totals before the service returns token buckets. Machine queries group client/provider/model; scoped queries call one workspace report per client, match recorded worker directories, and expose attribution precision and coverage. Checkout and ambiguous observations are separated from task totals. See [usage reports](usage.md) for installation, counter semantics, and coordinator/session limitations.

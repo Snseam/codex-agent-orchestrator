@@ -2,6 +2,15 @@
 
 Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interfaces may change between releases.
 
+## Unreleased
+
+### Added
+
+- `usage` queries local Claude Code, Codex CLI, Pi, and OpenCode token records through optional Tokscale tooling (`>=4.16.0 <5`).
+- Agent/model/date filters, JSON or terminal-table output, and CAO run/task workspace attribution with explicit precision and coverage metadata.
+- Separate input, output, cache read/write, and reasoning counters; incomplete or shared checkout usage is not presented as an exact task total.
+- An opt-in synthetic Tokscale integration test and bilingual token-usage documentation.
+
 ## [0.1.0] - 2026-09-15
 
 Initial public preview.

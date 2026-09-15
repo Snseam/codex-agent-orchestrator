@@ -8,6 +8,8 @@ import { capabilities } from '../src/adapters.mjs';
 import { validateTask } from '../src/task.mjs';
 import { OrchestratorError } from '../src/errors.mjs';
 import { runCommand } from '../src/process.mjs';
+import { Tokscale } from '../src/runtime/tokscale.mjs';
+import { UsageService, formatUsageTable } from '../src/usage.mjs';
 
 export const help = `Codex Agent Orchestrator (CAO) 0.1.0
 
@@ -27,12 +29,16 @@ Usage: node bin/cao.mjs <command> [options]
   recover    --run ID --task ID (recheck failed checkout or integration)
   cancel     --run ID --task ID
   cleanup    --run ID
+  usage      [--agent claude,codex,pi,opencode] [--model MODEL]
+             [--today | --since YYYY-MM-DD --until YYYY-MM-DD]
+             [--run ID [--task ID]] [--home PATH] [--tokscale-bin PATH] [--table]
   doctor
 
 Global: --state-dir PATH (outside project), --help, --json
-All command results are JSON. Keys can be comma-separated.
+Results are JSON unless usage --table is selected. Keys can be comma-separated.
 dispatch submits once; collect waits without resubmitting.
 verify checks a stopped candidate; integrate applies and rechecks it.
+usage queries local token records through optional Tokscale; scoped attribution is workspace-based.
 No automatic commits, pushes, provider changes or plugin installation.
 `;
 
@@ -42,6 +48,7 @@ const optionsByCommand = {
   verify: ['run', 'task'], retry: ['run', 'task', 'feedback-file'], resume: ['run', 'task'],
   input: ['run', 'task', 'keys', 'text-file'], integrate: ['run', 'task'],
   recover: ['run', 'task'], cancel: ['run', 'task'], cleanup: ['run'], doctor: [],
+  usage: ['agent', 'model', 'today', 'since', 'until', 'run', 'task', 'home', 'tokscale-bin', 'table'],
 };
 
 export function parseArgs(argv) {
@@ -55,7 +62,7 @@ export function parseArgs(argv) {
     }
     const [name, ...inlineParts] = token.slice(2).split('=');
     if (Object.hasOwn(values, name)) throw new OrchestratorError('invalid_arguments', `Duplicate option: --${name}`);
-    if (['help', 'json', 'output'].includes(name)) {
+    if (['help', 'json', 'output', 'today', 'table'].includes(name)) {
       if (inlineParts.length) throw new OrchestratorError('invalid_arguments', `--${name} takes no value`);
       values[name] = true;
     } else {
@@ -96,13 +103,20 @@ export async function main(argv = process.argv.slice(2)) {
     case 'recover': return orchestrator.recover(...taskArgs());
     case 'cancel': return orchestrator.cancel(...taskArgs());
     case 'cleanup': return orchestrator.cleanup(required('run'));
+    case 'usage': {
+      if (o.table && o.json) throw new OrchestratorError('invalid_arguments', '--table and --json are mutually exclusive.');
+      if (o['tokscale-bin'] !== undefined && !o['tokscale-bin']) throw new OrchestratorError('invalid_arguments', '--tokscale-bin must identify an executable.');
+      const service = new UsageService({ stateRoot: o['state-dir'], tokscale: new Tokscale({ binary: o['tokscale-bin'] || process.env.CAO_TOKSCALE_BIN || 'tokscale' }) });
+      const report = await service.query({ agent: o.agent, model: o.model, today: o.today, since: o.since, until: o.until, run: o.run, task: o.task, home: o.home });
+      return o.table ? { usageTable: formatUsageTable(report) } : report;
+    }
     case 'doctor': {
       const tools = {};
-      for (const name of ['node', 'git', 'herdr', 'claude', 'pi', 'opencode', 'codex']) {
-        try { const r = await runCommand([name, '--version'], { timeoutMs: 10000 }); tools[name] = { available: r.code === 0, version: r.stdout.trim() || r.stderr.trim() }; }
+      for (const name of ['node', 'git', 'herdr', 'claude', 'pi', 'opencode', 'codex', 'tokscale']) {
+        try { const r = await runCommand([name === 'tokscale' ? process.env.CAO_TOKSCALE_BIN || name : name, '--version'], { timeoutMs: 10000 }); tools[name] = { available: r.code === 0, version: r.stdout.trim() || r.stderr.trim() }; }
         catch (error) { tools[name] = { available: false, error: error.code || 'error' }; }
       }
-      return { tools, capabilities, note: 'Native child reporting is a contract, not verified telemetry or a hard concurrency limit.' };
+      return { tools, capabilities, tokenUsage: { backend: 'tokscale', optional: true, testedVersion: '4.16.0' }, note: 'Native child reporting is a contract, not verified telemetry or a hard concurrency limit.' };
     }
   }
 }
@@ -110,6 +124,7 @@ export async function main(argv = process.argv.slice(2)) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().then(data => {
     if (data?.help) process.stdout.write(data.help);
+    else if (data?.usageTable) process.stdout.write(data.usageTable);
     else process.stdout.write(`${JSON.stringify({ ok: true, data }, null, 2)}\n`);
   }).catch(error => {
     process.stderr.write(`${JSON.stringify({ ok: false, error: { code: error.code || 'error', message: error.message, details: error.details || {} } }, null, 2)}\n`);

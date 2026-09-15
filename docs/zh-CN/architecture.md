@@ -2,7 +2,7 @@
 
 > English: [../architecture.md](../architecture.md)
 
-CAO 是一个显式驱动的 CLI 控制器。它不常驻后台，没有 daemon 或 MCP 原生 children 监测，不接管 provider 配置，不自动安装插件，也不自动 commit/push。每次命令读取状态、执行一个阶段、写回状态并退出。
+CAO 是一个显式驱动的 CLI 控制器。它不常驻后台，没有 daemon 或 MCP 原生 children 监测，不接管 provider 配置，不自动安装插件，也不自动 commit/push。执行类命令读取状态、执行一个阶段、写回证据并退出；只读查询检查状态或本地用量记录。
 
 ## 运行边界
 
@@ -21,7 +21,7 @@ CAO 只管理自己创建的 run、attempt、Herdr session、workspace/pane 和�
 
 ## 入口层：`bin/cao.mjs`
 
-CLI 负责参数解析、读取任务文件、创建 `Orchestrator` 和输出 JSON。命令集合是固定阶段：`init`、`validate`、`dispatch`、`status`、`inspect`、`collect`、`verify`、`retry`、`resume`、`input`、`integrate`、`recover`、`cancel`、`cleanup`、`doctor`。
+CLI 负责参数解析、读取任务文件、创建 `Orchestrator` 和输出 JSON。命令集合是固定阶段：`init`、`validate`、`dispatch`、`status`、`inspect`、`collect`、`verify`、`retry`、`resume`、`input`、`integrate`、`recover`、`cancel`、`cleanup`、`doctor`、`usage`。
 
 重要语义：
 
@@ -113,3 +113,7 @@ Git 层负责项目快照、worktree、patch 和集成前冲突检查。
 checks 使用 argv 数组直接 spawn，不走 shell。每个 check 在候选 cwd 或目标项目 cwd 运行，遵守 `timeoutMs`。超时或取消会终止 CAO 启动的进程组；stdout/stderr 有大小上限并写入证据 JSON。
 
 验证命令不应修改源码。`verify` 和 `integrate` 都会检查验证前后快照是否稳定；如果验证修改了源码，attempt 会进入失败/返工状态。
+
+## Token 查询：`src/usage.mjs`、`src/runtime/tokscale.mjs`
+
+`UsageService` 调用可选的外部 Tokscale CLI，不修改 CAO 账本。适配器先校验版本、分组、数字字段和聚合总数，再返回 token 各分项。本机查询按 client/provider/model 分组；run/task 查询逐个 client 获取 workspace 报告，与已记录的 worker 目录匹配，明确输出归属精度与覆盖率。共享 checkout 和歧义记录不计入 task 总数。安装方式、计数语义及协调器/session 限制见 [Token 用量报告](usage.md)。
