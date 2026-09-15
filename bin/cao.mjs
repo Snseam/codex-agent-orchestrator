@@ -17,6 +17,8 @@ import { GatewayManager } from '../src/gateway/manager.mjs';
 import { MonitorManager, openMonitor } from '../src/monitor/manager.mjs';
 import { loadRun } from '../src/state.mjs';
 import { getProjectInfo } from '../src/git.mjs';
+import { installCaoSkill, statusCaoSkill, uninstallCaoSkill } from '../src/skills.mjs';
+import { disableConversationMode, enableConversationMode, statusConversationMode } from '../src/conversation-mode.mjs';
 
 export const help = `Codex Agent Orchestrator (CAO) 0.1.0
 
@@ -40,6 +42,14 @@ Usage: node bin/cao.mjs <command> [options]
              [--today | --since YYYY-MM-DD --until YYYY-MM-DD]
              [--run ID [--task ID]] [--home PATH] [--tokscale-bin PATH] [--table]
   doctor
+
+  skill install [--skills-dir PATH]
+  skill status [--skills-dir PATH]
+  skill uninstall [--skills-dir PATH]
+  mode enable [--thread ID] [--project PATH] [--agent auto|claude|pi|opencode|codex]
+             [--profile ID] [--max-parallel N] [--max-attempts N]
+  mode status [--thread ID]
+  mode disable [--thread ID]
 
   monitor start [--project PATH | --run ID | --all] [--open] [--id NAME] [--port 0]
   monitor status [--id NAME]
@@ -90,12 +100,15 @@ const optionsByCommand = {
   'profile export': ['id', 'file'], 'profile import-cc-switch': ['directory', 'provider', 'app', 'id', 'model', 'allow-shared'],
   'profile refresh': ['id', 'model'], 'secret set': ['id', 'stdin'], 'secret remove': ['id'],
   'route explain': ['file'], 'route reservations': [],
+  'skill install': ['skills-dir'], 'skill status': ['skills-dir'], 'skill uninstall': ['skills-dir'],
+  'mode enable': ['thread', 'project', 'agent', 'profile', 'max-parallel', 'max-attempts'],
+  'mode status': ['thread'], 'mode disable': ['thread'],
   'gateway start': ['profile', 'id', 'allow-shared'], 'gateway status': ['id'], 'gateway stop': ['id'], 'gateway list': [],
   'monitor start': ['project', 'run', 'all', 'open', 'id', 'port', 'coordinator', 'codex-home', 'claude-home'],
   'monitor status': ['id'], 'monitor stop': ['id'],
   'monitor snapshot': ['project', 'run', 'all', 'coordinator', 'codex-home', 'claude-home'],
 };
-const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor']);
+const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor', 'skill', 'mode']);
 
 export function parseArgs(argv) {
   const values = {};
@@ -164,6 +177,12 @@ export async function main(argv = process.argv.slice(2)) {
       const { MonitorCollector } = await import('../src/monitor/collector.mjs');
       return new MonitorCollector({ root: profiles.root, ...await monitorScope() }).snapshot();
     }
+    case 'skill install': return installCaoSkill({ skillsDir: o['skills-dir'] });
+    case 'skill status': return statusCaoSkill({ skillsDir: o['skills-dir'] });
+    case 'skill uninstall': return uninstallCaoSkill({ skillsDir: o['skills-dir'] });
+    case 'mode enable': return enableConversationMode({ stateRoot: profiles.root, thread: o.thread, project: o.project, agent: o.agent, profile: o.profile, maxParallel: o['max-parallel'], maxAttempts: o['max-attempts'] });
+    case 'mode status': return statusConversationMode({ stateRoot: profiles.root, thread: o.thread });
+    case 'mode disable': return disableConversationMode({ stateRoot: profiles.root, thread: o.thread });
     case 'source discover': return discoverCCSwitch({ directory: o.directory });
     case 'profile list': return { profiles: await profiles.list(), defaultProfileId: (await profiles.getDefault())?.id || null };
     case 'profile show': {
