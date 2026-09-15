@@ -231,7 +231,7 @@ Routing and capacity limits are CAO attempt controls. `account.maxParallel` limi
 
 ## Current validation evidence
 
-Profiled execution has been smoke-checked with Herdr 0.9+ using two Claude sessions and a local simulated Anthropic API. The check used two profiles with different models and keys, exercised Read/Write/Bash/tool-result submission, accepted both tasks independently, matched 16 gateway requests, confirmed global provider files were unchanged, and released runtime resources. This verifies local orchestration and configuration isolation for that scenario; it is not a real model-quality or provider-billing test.
+Profiled execution has been smoke-checked with Herdr 0.9+ using two Claude sessions and a local simulated Anthropic API. The isolated rerun used two profiles with different models and keys, exercised Read/Write/Bash/tool-result submission, accepted both tasks independently, matched 14 mock requests, confirmed global provider files were unchanged, and released runtime resources. Both native session/model records were present only under the private test configuration, with no matching sessions in user Claude projects. This verifies local orchestration and configuration/session isolation for that scenario; it is not a real model-quality or provider-billing test.
 
 Codex CLI 0.154.0 and Pi 0.85.1 also passed native CLI profile request checks against local mock Responses and Chat Completions APIs. These used isolated native test directories and verified model selection and gateway authentication, not full Herdr task lifecycles. OpenCode was not installed for live validation.
 
@@ -241,6 +241,10 @@ To reproduce the two-session Claude check:
 npm run smoke:profiles
 ```
 
-This opt-in script needs Herdr and Claude Code. It creates its own Git fixture, confirms that fixture's native directory-trust prompt, runs against a local mock API, and retains evidence under `work/profile-smoke-*`. It does not require a paid upstream API call. Native CLIs may still perform their normal background network requests and write history/session state; CAO preserves the existing native home so installed skills and extensions stay available.
+This opt-in script needs Herdr and Claude Code. It creates its own Git fixture, initializes disposable first-run UI state so the welcome screen cannot consume the first task prompt, confirms the fixture's native directory-trust prompt, and runs against a local mock API. The synthetic model names `alpha` and `beta` are routing fixtures, not real provider models.
+
+Each mock run uses a fresh private [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars) under `work/profile-smoke-*/private-claude-runtime/claude`. It does not copy your Claude credentials, settings, or plugins. CAO passes this directory to both the Herdr daemon and the worker's launch environment, then verifies that native session records appear there rather than in your normal Claude projects directory. Evidence and synthetic usage remain in the private test directory, outside normal session discovery by model pickers and token-usage tools. This test requires no paid upstream model call; it is not a network sandbox.
+
+Normal CAO tasks still use your configured native home, skills, and extensions. Only mock tests use this disposable configuration. Older smoke runs may have written `alpha` / `beta` sessions to your normal Claude projects directory; back up and move only confirmed mock sessions out of that directory, then refresh local usage caches. Do not rename them to real models or delete unrelated conversations.
 
 The relay currently limits request bodies to 16 MiB and upstream socket inactivity to 120 seconds. Standalone gateways do not reserve CAO attempt slots. Gateway ids are immutable evidence ids; start a new id after stopping one. Running attempts keep their resolved snapshots. `profile refresh` updates imported connection fields for future attempts while preserving CAO routing metadata.

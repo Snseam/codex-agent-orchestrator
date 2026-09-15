@@ -8,8 +8,10 @@ import http from 'node:http';
 import path from 'node:path';
 import { Orchestrator } from '../src/orchestrator.mjs';
 import { ProfileStore } from '../src/profiles.mjs';
+import { prepareExecution } from '../src/execution-config.mjs';
 import { Herdr } from '../src/runtime/herdr.mjs';
 import { fixture, promptData, task } from '../tests/helpers.mjs';
+import { createClaudeSmokeIsolation } from './helpers/claude-smoke-isolation.mjs';
 
 const PROFILE_IDS = ['alpha', 'beta'];
 const CLAUDE_ARGS = [
@@ -165,6 +167,24 @@ function closeServer(server) {
   return new Promise(resolve => server.close(resolve));
 }
 
+async function findSessionFiles(root, sessionId, matches = []) {
+  if (!sessionId) return matches;
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return matches;
+    throw error;
+  }
+  for (const entry of entries) {
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      await findSessionFiles(file, sessionId, matches);
+    } else if (entry.isFile() && entry.name === `${sessionId}.jsonl`) matches.push(file);
+  }
+  return matches;
+}
+
 async function registerProfiles(store, endpoint) {
   for (const id of PROFILE_IDS) {
     const ref = await store.putSecret(id, `mock-${id}`);
@@ -199,6 +219,9 @@ async function dispatchTasks(service, runId, inputs) {
 }
 
 async function nudgeIfTrustPrompt(service, runId, taskId, terminalText) {
+  if (terminalText.includes('Welcome to Claude Code') && terminalText.includes('Security notes:') && terminalText.includes('Press Enter to continue')) {
+    await service.input(runId, taskId, { keys: ['enter'] });
+  }
   if (terminalText.includes('Yes, I trust this folder')) await service.input(runId, taskId, { keys: ['down', 'enter'] });
   if (terminalText.includes('Yes, I accept')) await service.input(runId, taskId, { keys: ['down', 'enter'] });
 }
@@ -251,29 +274,33 @@ async function main() {
   const fixtureState = await fixture();
   const evidence = path.resolve(`work/profile-smoke-${Date.now()}`);
   await fs.mkdir(evidence, { recursive: true });
+  const isolation = await createClaudeSmokeIsolation({ root: path.join(evidence, 'private-claude-runtime') });
 
   const before = await snapshotGlobalProviderConfigs();
   const received = [];
   const upstream = createMockAnthropicServer({ evidence, received });
-  await listen(upstream);
 
   const store = new ProfileStore({ root: fixtureState.stateRoot });
-  const herdr = new Herdr();
-  const service = new Orchestrator({ stateRoot: fixtureState.stateRoot, profiles: store, herdr });
-  const run = await service.init({ project: fixtureState.project, maxParallel: 2 });
+  const herdr = new Herdr({ environment: isolation.environment });
+  const materialize = (input) => prepareExecution({ ...input, environment: isolation.environment });
+  const service = new Orchestrator({ stateRoot: fixtureState.stateRoot, profiles: store, herdr, materialize });
   const inputs = smokeTasks();
-
-  await fs.writeFile(path.join(evidence, 'probe.json'), JSON.stringify({
-    fixture: fixtureState.base,
-    fixtureRetained: true,
-    stateRoot: fixtureState.stateRoot,
-    runId: run.id,
-    session: run.herdrSession,
-    evidence,
-  }, null, 2));
-  console.log(JSON.stringify({ phase: 'starting', evidence, runId: run.id, session: run.herdrSession }));
+  let run;
 
   try {
+    await listen(upstream);
+    run = await service.init({ project: fixtureState.project, maxParallel: 2 });
+    await fs.writeFile(path.join(evidence, 'probe.json'), JSON.stringify({
+      fixture: fixtureState.base,
+      fixtureRetained: true,
+      stateRoot: fixtureState.stateRoot,
+      runId: run.id,
+      session: run.herdrSession,
+      evidence,
+      claudeConfigDir: isolation.claudeConfigDir,
+    }, null, 2));
+    console.log(JSON.stringify({ phase: 'starting', evidence, runId: run.id, session: run.herdrSession }));
+
     await registerProfiles(store, `http://127.0.0.1:${upstream.address().port}`);
     await dispatchTasks(service, run.id, inputs);
     await waitForSubmissions({ service, herdr, run, inputs, evidence });
@@ -284,8 +311,30 @@ async function main() {
       assert.ok(received.some(record => record.model === id && record.taskId === `fix-${id}` && record.authMatches));
     }
     assert.ok(received.every(record => record.authMatches));
+    const sessionIsolation = [];
+    const userConfigDirs = [...new Set([path.join(process.env.HOME, '.claude'), process.env.CLAUDE_CONFIG_DIR].filter(Boolean).map(p => path.resolve(p)))];
+    for (const item of verified) {
+      const inspected = await service.inspect(run.id, item.taskId);
+      const nativeSessionId = inspected.attempt.nativeSession.id;
+      const projectRoot = path.join(isolation.claudeConfigDir, 'projects');
+      const privateMatches = await findSessionFiles(projectRoot, nativeSessionId);
+      assert.ok(privateMatches.length > 0, `${item.taskId} should record native session ${nativeSessionId} under private Claude config`);
+      const models = new Set();
+      for (const file of privateMatches) {
+        for (const line of (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean)) {
+          const record = JSON.parse(line);
+          if (record.message?.model) models.add(record.message.model);
+        }
+      }
+      assert.ok(models.has(item.profileId), `${item.taskId} must persist its mock model in the private session`);
+      for (const directory of userConfigDirs) {
+        const userMatches = await findSessionFiles(path.join(directory, 'projects'), nativeSessionId);
+        assert.equal(userMatches.length, 0, `${item.taskId} native session ${nativeSessionId} must not appear in user Claude projects`);
+      }
+      sessionIsolation.push({ taskId: item.taskId, nativeSessionId, models: [...models], privateSessionFiles: privateMatches.length, userSessionFiles: 0 });
+    }
 
-    const result = { passed: true, verified, requests: received.length, globalProviderConfigsUnchanged: true, evidence };
+    const result = { passed: true, verified, requests: received.length, globalProviderConfigsUnchanged: true, sessionIsolation, claudeConfigDir: isolation.claudeConfigDir, evidence };
     await fs.writeFile(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
     console.log(JSON.stringify(result));
   } finally {

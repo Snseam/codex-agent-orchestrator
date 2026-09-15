@@ -96,6 +96,20 @@ test('bootstrap reveals only split ready marker material, never the full marker 
   assert.match(manifest.bootstrap, /printf '\\nCAO_ENV_%s\\n'/);
 });
 
+test('claude profile exports an explicit private config dir through settings and bootstrap', async t => {
+  const environmentRoot = await root(t);
+  const claudeConfigDir = path.join(environmentRoot, 'private-claude');
+  const { manifest } = await prepare(t, 'claude', { environment: { CLAUDE_CONFIG_DIR: claudeConfigDir } });
+  const settings = JSON.parse(await fs.readFile(path.join(manifest.privateDirectory, 'claude-settings.json'), 'utf8'));
+  const envFile = await fs.readFile(manifest.envFile, 'utf8');
+
+  assert.equal(settings.env.CLAUDE_CONFIG_DIR, claudeConfigDir);
+  assert.ok(manifest.envKeys.includes('CLAUDE_CONFIG_DIR'));
+  assert.ok(envFile.includes(`export CLAUDE_CONFIG_DIR='${claudeConfigDir}'`));
+  assert.ok(manifest.bootstrap.includes(manifest.envFile));
+  assert.deepEqual(manifest.nativeSession.logRoots, [path.join(claudeConfigDir, 'projects')]);
+});
+
 test('agent launch args preserve safe native args and do not mutate configured global roots', async t => {
   const environmentRoot = await root(t);
   const cases = [

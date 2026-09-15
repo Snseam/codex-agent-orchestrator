@@ -231,10 +231,14 @@ worker 停止后，CAO 清理未改变的私有执行文件。若文件被修改
 
 ## 当前验证证据
 
-Profiled execution 已用 Herdr 0.9+、两个 Claude session 和本地模拟 Anthropic API 做过冒烟检查。该检查使用两个不同模型和 key 的 profile，覆盖 Read/Write/Bash/工具结果提交，两个任务独立 accepted，16 个 gateway 请求匹配，全局 provider 文件未变化，并完成 runtime 释放。它验证的是该场景下的本地编排和配置隔离，不是真实模型质量或 provider 计费测试。
+Profiled execution 已用 Herdr 0.9+、两个 Claude session 和本地模拟 Anthropic API 做过冒烟检查。隔离后的复测使用两个不同模型和 key 的 profile，覆盖 Read/Write/Bash/工具结果提交，两个任务独立 accepted，14 个 mock 请求匹配，全局 provider 文件未变化，并完成 runtime 释放。两份原生会话及模型记录均只出现在私有测试配置目录，用户 Claude projects 目录没有对应会话。它验证的是该场景下的本地编排、配置与会话隔离，不是真实模型质量或 provider 计费测试。
 
 Codex CLI 0.154.0 和 Pi 0.85.1 的原生 CLI profile 请求也分别通过了本地模拟 Responses / Chat Completions API 检查，验证了模型与网关认证。测试使用隔离的原生目录，并非完整 Herdr 任务生命周期验证；OpenCode 本机未安装，尚未实测。
 
-可通过 `npm run smoke:profiles` 复现两个真实 Claude 会话的测试。它需要 Herdr 和 Claude Code，会创建自己的 Git 夹具、确认该夹具的原生目录信任提示，并将证据保留在 `work/profile-smoke-*`。模型请求使用本地模拟 API；原生 CLI 仍可能产生正常的后台网络请求、历史和会话写入。CAO 保留原生用户目录，便于继续使用已安装的技能与扩展。
+可通过 `npm run smoke:profiles` 复现两个真实 Claude 会话的测试。它需要 Herdr 和 Claude Code，会创建自己的 Git 夹具，初始化独立的首次启动界面状态，避免欢迎页吞掉第一条任务提示词；随后确认该夹具的目录信任提示，并连接本地模拟 API。`alpha` / `beta` 是用来区分路由的假模型名，不是真实提供商模型。
+
+每次 mock 测试都会在 `work/profile-smoke-*/private-claude-runtime/claude` 创建全新的私有 [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)，不复制你的 Claude 凭证、设置或插件。CAO 同时把该目录传给 Herdr daemon 和 worker 启动环境，并验证原生会话记录出现在私有目录、没有进入正常的 Claude projects 目录。测试证据和模拟用量保留在私有目录，避免进入模型选择器及 Token 工具默认扫描的会话历史。模型请求不需要付费上游 API；这不是网络沙箱。
+
+正常 CAO 任务继续使用你的原生用户目录、技能与扩展，只有 mock 测试使用独立配置。旧版 smoke 可能已把 `alpha` / `beta` 会话写入正常 Claude projects 目录；应先备份，仅移出确认属于 mock 的会话，再刷新本地用量缓存。不要把假模型改名成真实模型，也不要删除无关对话。
 
 当前网关请求体上限为 16 MiB，上游 socket 无数据活动超时为 120 秒。手动启动的独立网关不预留 CAO attempt 名额。网关 id 是不可重用的证据标识，停止后需要使用新 id。运行中的尝试保持原快照；`profile refresh` 为后续尝试更新连接字段，并保留 CAO 手写路由策略。
