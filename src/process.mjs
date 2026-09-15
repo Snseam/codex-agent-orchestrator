@@ -78,6 +78,8 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
     let termination;
     let spawnError;
     let killTimer;
+    let killEscalated = false;
+    let pendingTerminationClose = null;
 
     const finish = (fn, value) => {
       if (settled) return;
@@ -100,14 +102,43 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
       }
     };
 
+    const finishTerminationAfterEscalation = () => {
+      if (!pendingTerminationClose) return;
+      const { result, closeSignal } = pendingTerminationClose;
+      pendingTerminationClose = null;
+      if (termination === 'timeout') {
+        finish(reject, new OrchestratorError('command_timeout', `command timed out after ${timeoutMs}ms`, {
+          argv,
+          cwd,
+          timeoutMs,
+          signal: closeSignal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          truncated: result.truncated,
+        }));
+        return;
+      }
+      if (termination === 'cancelled') {
+        finish(reject, new OrchestratorError('command_cancelled', 'command was cancelled', {
+          argv,
+          cwd,
+          signal: closeSignal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          truncated: result.truncated,
+        }));
+      }
+    };
+
     const terminate = (reason) => {
       if (termination) return;
       termination = reason;
       killOwnedProcess();
       killTimer = setTimeout(() => {
+        killEscalated = true;
         if (!settled) killOwnedProcess('SIGKILL');
+        finishTerminationAfterEscalation();
       }, 1000);
-      killTimer.unref();
     };
 
     const onAbort = () => terminate('cancelled');
@@ -131,27 +162,9 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
         stderr: bufferText(stderr),
         truncated: stdout.truncated || stderr.truncated,
       };
-      if (termination === 'timeout') {
-        finish(reject, new OrchestratorError('command_timeout', `command timed out after ${timeoutMs}ms`, {
-          argv,
-          cwd,
-          timeoutMs,
-          signal,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          truncated: result.truncated,
-        }));
-        return;
-      }
-      if (termination === 'cancelled') {
-        finish(reject, new OrchestratorError('command_cancelled', 'command was cancelled', {
-          argv,
-          cwd,
-          signal,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          truncated: result.truncated,
-        }));
+      if (termination === 'timeout' || termination === 'cancelled') {
+        pendingTerminationClose = { result, closeSignal: signal };
+        if (killEscalated) finishTerminationAfterEscalation();
         return;
       }
       if (spawnError) {

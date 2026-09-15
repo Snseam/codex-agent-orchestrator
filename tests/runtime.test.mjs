@@ -144,6 +144,52 @@ test('runCommand abort kills a grandchild that ignores TERM and holds stdout ope
   }
 });
 
+
+test('runCommand waits for abort escalation before rejecting when grandchild ignores TERM without holding stdout open', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cao-abort-detached-stdout-'));
+  const pidFile = join(directory, 'child.pid');
+  let pid;
+  try {
+    const childCode = `
+      process.on("SIGTERM", () => {});
+      process.stdout.on("error", () => {});
+      require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      setInterval(() => { try { process.stdout.write("x"); } catch {} }, 10);
+      setInterval(() => {}, 1000);
+    `;
+    const script = `
+      const { spawn } = require('node:child_process');
+      process.on('SIGTERM', () => process.exit(0));
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(childCode)}], {
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      child.stdout.pipe(process.stdout);
+      setInterval(() => {}, 1000);
+    `;
+    const controller = new AbortController();
+    const promise = runCommand([execPath, '-e', script], { signal: controller.signal, timeoutMs: 0, maxBytes: 128 });
+    const started = Date.now();
+    while (!existsSync(pidFile) && Date.now() - started < 1000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(existsSync(pidFile), 'child process should have started before abort');
+    pid = Number(readFileSync(pidFile, 'utf8'));
+    assert.equal(processExists(pid), true, 'grandchild should be running before abort');
+    controller.abort();
+    await assert.rejects(
+      promise,
+      (error) => error instanceof OrchestratorError && error.code === 'command_cancelled',
+    );
+    assert.equal(await waitForProcessExit(pid, 1000), true, 'abort rejection should happen only after cleanup escalation can kill the orphaned grandchild');
+  } finally {
+    if (pid && processExists(pid)) {
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+
 test('runCommand rejects invalid argv', async () => {
   await assert.rejects(
     runCommand('echo hi'),
