@@ -8,11 +8,62 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Execution profiles](#execution-profiles) · [Agent support](#agent-support) · [Token usage](#token-usage) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
+[Start in Codex](#start-in-codex) · [CLI quick start](#quick-start) · [How it works](#how-it-works) · [Execution profiles](#execution-profiles) · [Agent support](#agent-support) · [Token usage](#token-usage) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
 
 Codex Agent Orchestrator (**CAO**) is a local, zero-dependency Node.js CLI for coordinating coding agents through [Herdr](https://github.com/herdrdev/herdr). Let Codex App or Codex CLI plan the work, assign scoped tasks to Claude Code or other agent sessions, and verify their changes before integrating them into your project.
 
 > **Early preview.** The base Claude Code workflow has passed local end-to-end tests, including controlled failure and repair. Profiled execution has also been checked with Herdr 0.9+ using two Claude sessions against a local Anthropic-compatible test server. Codex and Pi profile requests have passed local mock API checks; their complete Herdr workflows and OpenCode remain unverified. Large-scale speed, quality, and cost effects have not been measured.
+
+## Start in Codex
+
+**Paste once, then describe your work normally.** This tells Codex to use CAO by default for subsequent development tasks in that conversation. You do not need to write task JSON, run the CLI yourself, or globally install a skill.
+
+1. Open a **new or existing local conversation** in Codex App or Codex CLI with access to your project files and terminal.
+2. Copy the entire prompt below. Keep the defaults, or edit the project, agent, and limits to suit your work.
+3. After Codex reports that setup is ready, send your development request. You can also append the first request to the same message.
+
+```text
+Use Codex Agent Orchestrator (CAO) by default for development tasks in this conversation from now on, until I ask to turn it off. Keep this preference scoped to this conversation.
+
+Project: use the current project; ask for its path only if unclear.
+Worker agent: use an existing compatible CAO profile when configured; otherwise use my configured Claude Code.
+Maximum concurrent external sessions: 2.
+Maximum attempts per task: 3.
+
+Set up the workflow:
+- Find and reuse my local CAO checkout. If absent, clone https://github.com/Snseam/codex-agent-orchestrator into an unused directory outside the target project, and report that path. Preserve existing files.
+- Read the checkout's README.md and skills/herdr-dev/SKILL.md, resolve bin/cao.mjs to an absolute path, and check --help and doctor. Use node with that CLI path; a global cao command or skill installation is not required.
+- Check the target Git repository, installed agents, and existing CAO profiles/default. Keep one shared CAO state directory outside the target project. If an essential dependency, login, initial Git commit, or permission is missing, explain the exact blocker and the smallest next step. Do not claim setup succeeded or silently switch workflows.
+- Preserve my native agent and CC Switch provider/authentication settings. Do not install dependencies or change global configuration just to activate this preference.
+
+For subsequent development requests:
+- You own requirements, task boundaries, acceptance checks, review, and integration. Generate task files and drive CAO yourself; delegate implementation through CAO-managed sessions.
+- Give independent work separate worktrees and clear owned paths. Respect dependencies; request useful native agent collaboration only when actually supported.
+- Drive dispatch → collect → verify. Use evidence to repair within the attempt limit, then integrate accepted changes and recheck the project. Terminal idle or an agent's success claim is not acceptance.
+- Inspect needs_input or uncertain outcomes before acting; never blindly replay an assignment. Stop and clean up owned sessions when finished or cancelled, retaining evidence.
+- Keep the resolved CLI path, project, state directory, run/task IDs, and this preference in your conversation handoff notes. After an interruption, inspect the recorded run before continuing.
+- Answer questions and planning requests directly without starting workers. If a requested development task cannot use CAO, explain why rather than quietly doing it another way. Respect later instructions and existing authorization for commits or publication.
+
+If I supplied no development task, only check readiness and report the resolved paths, selected agent/profile, and any blocker. Then wait for my next request.
+```
+
+Once ready, messages can be as simple as:
+
+```text
+Add CSV import to this project. Handle duplicate rows and malformed files, add regression coverage, and finish integration with passing checks.
+```
+
+| What you want | What to send in the same conversation |
+| --- | --- |
+| See progress | “Show the current CAO run, task states, and blockers.” |
+| Change the agent | “Use my configured Pi for subsequent CAO tasks; check compatibility first.” |
+| Handle one task directly | “For this task only, work directly without CAO.” |
+| Turn off the default | “Stop using CAO by default in this conversation. Inspect and safely stop any active CAO work first; keep its changes and evidence.” |
+| Restore the default | “Use CAO by default again for development tasks in this conversation.” |
+
+This is a **conversation instruction**, not an account-wide setting or background scheduler. Paste it again in a different conversation. It does not promise continued orchestration after Codex stops running. To resume an existing run in another conversation, also provide its project, state directory, and run ID so Codex can inspect it before starting anything new.
+
+The prompt can fetch CAO itself, but it still needs Node.js 22.13+, Git, Herdr, a configured supported agent, and a target repository with at least one commit. Codex reports missing prerequisites during setup. For a brand-new project, explicitly ask it to create the initial Git skeleton and commit first. See [manual CLI setup](#quick-start) or [execution profiles](docs/execution-profiles.md) for more control.
 
 ## Why CAO?
 
