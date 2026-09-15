@@ -27,6 +27,7 @@ Live tests use your configured Claude Code and may incur provider charges. They 
 - Describe the problem and expected outcome. Open an issue first for large changes to orchestration, adapters, or public interfaces.
 - Keep one pull request focused on one concern. Explain behavior changes and add regression coverage where it protects a meaningful boundary.
 - Preserve existing model/provider configuration. Do not make ordinary test runs launch agents, install tools, or require secrets.
+- Mock native-agent tests must isolate configuration and session storage before daemon/worker startup. Verify synthetic sessions stay out of the user's normal history; unchanged provider files alone do not prove isolation. Do not copy user credentials or plugins into mock fixtures.
 - Keep task/attempt identity, result verification, cancellation, and integration recovery explicit. Read [architecture](docs/architecture.md) and [states](docs/states.md) before changing these paths.
 - Avoid runtime dependencies unless they are justified and discussed. CAO currently runs on Node's standard library.
 - Distinguish a launch adapter from a verified live integration. Include tool versions and sanitized evidence for new agent support; do not infer it from a mocked test alone.

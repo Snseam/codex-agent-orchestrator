@@ -62,6 +62,7 @@ export async function prepareExecution({ task, attempt, profile, gateway, enviro
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_MODEL: profile.model,
     });
+    if (environment.CLAUDE_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = path.resolve(environment.CLAUDE_CONFIG_DIR);
     for (const role of ['HAIKU', 'SONNET', 'OPUS', 'FABLE']) {
       const selector = role.toLowerCase();
       env[`ANTHROPIC_DEFAULT_${role}_MODEL`] = Object.hasOwn(profile.modelMap, selector) ? selector : profile.model;

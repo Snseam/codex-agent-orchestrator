@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execPath } from 'node:process';
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -250,6 +251,55 @@ test('cleanHerdrEnv removes inherited pane/session routing without dropping ordi
   assert.deepEqual(env, {
     PATH: '/bin',
   });
+});
+
+test('Herdr applies isolated environment to server, pane bootstrap, and agent start', async () => {
+  const calls = [];
+  const spawns = [];
+  const isolatedEnv = {
+    PATH: '/bin',
+    HOME: '/user/home',
+    ANTHROPIC_API_KEY: 'should-not-be-scrubbed-by-herdr',
+    CLAUDE_CONFIG_DIR: '/tmp/cao-private-claude',
+    HERDR_SESSION: 'default',
+  };
+  let snapshots = 0;
+  const runner = async (argv, options = {}) => {
+    calls.push({ argv, env: options.env });
+    if (argv.includes('api') && argv.includes('snapshot')) {
+      snapshots++;
+      if (snapshots === 1) {
+        return { code: 1, stdout: '', stderr: '{"id":"snapshot","error":{"code":"server_not_running","message":"absent"}}', truncated: false };
+      }
+    }
+    return { code: 0, stdout: '{"id":"ok","result":{"root_pane":{"pane_id":"w1:p1","terminal_id":"t1"}}}', stderr: '', truncated: false };
+  };
+  const spawner = (binary, args, options) => {
+    spawns.push({ binary, args, env: options.env });
+    const child = new EventEmitter();
+    child.pid = 1234;
+    child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  };
+  const herdr = new Herdr({ binary: 'herdr-test', runner, spawner, environment: isolatedEnv });
+  const manifest = { bootstrap: '. /tmp/env.sh', readyMarker: 'CAO_ENV_test' };
+
+  await herdr.ensureServer('cao-run', join(tmpdir(), `cao-herdr-${randomUUID()}.log`));
+  await herdr.prepareEnvironment('cao-run', 'w1:p1', manifest);
+  await herdr.startAgent('cao-run', 'worker', 'claude', 'w1:p1', ['--model', 'alpha']);
+
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].env.CLAUDE_CONFIG_DIR, '/tmp/cao-private-claude');
+  assert.equal(spawns[0].env.HOME, '/user/home');
+  assert.equal(spawns[0].env.HERDR_SESSION, undefined);
+  for (const call of calls) {
+    assert.equal(call.env.CLAUDE_CONFIG_DIR, '/tmp/cao-private-claude');
+    assert.equal(call.env.HOME, '/user/home');
+    assert.equal(call.env.HERDR_SESSION, undefined);
+  }
+  assert.ok(calls.some(call => call.argv.includes('pane') && call.argv.includes('run')));
+  assert.ok(calls.some(call => call.argv.includes('agent') && call.argv.includes('start')));
 });
 
 test('Herdr methods build explicit session argv and parse JSON envelopes', async () => {

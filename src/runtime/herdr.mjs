@@ -103,9 +103,15 @@ function waitForSpawn(child) {
 }
 
 export class Herdr {
-  constructor({ binary = 'herdr', runner = runCommand } = {}) {
+  constructor({ binary = 'herdr', runner = runCommand, environment = process.env, spawner = spawn } = {}) {
     this.binary = binary;
     this.runner = runner;
+    this.environment = environment;
+    this.spawner = spawner;
+  }
+
+  env() {
+    return cleanHerdrEnv(this.environment);
   }
 
   async json(args, { timeoutMs = 30000 } = {}) {
@@ -115,7 +121,7 @@ export class Herdr {
     const argv = [this.binary, ...args];
     const result = await this.runner(argv, {
       timeoutMs,
-      env: cleanHerdrEnv(),
+      env: this.env(),
       maxBytes: 1048576,
     });
     const envelope = parseHerdrEnvelope(result, argv);
@@ -160,10 +166,10 @@ export class Herdr {
     chmodSync(logPath, 0o600);
     let child;
     try {
-      child = spawn(this.binary, ['--session', session, 'server'], {
+      child = this.spawner(this.binary, ['--session', session, 'server'], {
         detached: true,
         shell: false,
-        env: cleanHerdrEnv(),
+        env: this.env(),
         stdio: ['ignore', logFd, logFd],
       });
       child.unref();
@@ -226,14 +232,14 @@ export class Herdr {
   async prepareEnvironment(session, pane, manifest) {
     validateSession(session);
     await this.runInPane(session, pane, manifest.bootstrap);
-    const result = await this.runner([this.binary, '--session', session, 'pane', 'wait-output', '--match', manifest.readyMarker, '--source', 'recent-unwrapped', '--timeout', '10000', pane], { timeoutMs: 15000, env: cleanHerdrEnv() });
+    const result = await this.runner([this.binary, '--session', session, 'pane', 'wait-output', '--match', manifest.readyMarker, '--source', 'recent-unwrapped', '--timeout', '10000', pane], { timeoutMs: 15000, env: this.env() });
     if (result.code !== 0) throw new OrchestratorError('execution_environment_failed', 'The owned pane did not confirm its isolated environment.');
     return { prepared: true };
   }
 
   async runInPane(session, pane, command) {
     validateSession(session);
-    const result = await this.runner([this.binary, '--session', session, 'pane', 'run', pane, command], { timeoutMs: 10000, env: cleanHerdrEnv() });
+    const result = await this.runner([this.binary, '--session', session, 'pane', 'run', pane, command], { timeoutMs: 10000, env: this.env() });
     if (result.code !== 0) throw new OrchestratorError('execution_environment_failed', 'Could not send the execution bootstrap to its owned pane.');
     return { sent: true };
   }
@@ -270,7 +276,7 @@ export class Herdr {
   async readAgent(session, name, lines = 80) {
     validateSession(session);
     const argv = [this.binary, '--session', session, 'agent', 'read', name, '--source', 'visible', '--lines', String(lines), '--format', 'text'];
-    const result = await this.runner(argv, { timeoutMs: 10000, env: cleanHerdrEnv(), maxBytes: 1048576 });
+    const result = await this.runner(argv, { timeoutMs: 10000, env: this.env(), maxBytes: 1048576 });
     if (result.code !== 0) {
       const envelope = parseHerdrEnvelope(result, argv);
       const nativeCode = nativeErrorCode(envelope, 'herdr_command_failed');

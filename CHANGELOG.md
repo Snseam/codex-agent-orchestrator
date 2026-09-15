@@ -24,6 +24,7 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Fixed
 
+- Isolate mock Claude profile smoke runs from user configuration and session history, preventing synthetic `alpha` / `beta` models from appearing in normal model pickers and token reports. Explicit Claude config directories now reach the actual worker bootstrap as well as recorded log roots.
 - Preserve command cancellation escalation after a leader exits, so TERM-resistant descendants are killed before cancellation settles.
 
 ## [0.1.0] - 2026-09-15
