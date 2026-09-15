@@ -17,7 +17,7 @@ function addNullable(a, b) {
   return (a || 0) + (b || 0);
 }
 
-function claudeProjectSlug(value) {
+export function claudeProjectSlug(value) {
   return path.resolve(value).replace(/[^A-Za-z0-9]/g, '-');
 }
 

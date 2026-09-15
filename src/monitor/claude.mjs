@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { usageForClaudeSession } from './claude-usage.mjs';
+import { claudeProjectSlug, usageForClaudeSession } from './claude-usage.mjs';
 
 const HOOK_EVENTS = [
   'SessionStart',
@@ -531,10 +531,6 @@ async function listJsonlFiles(directory, out = [], budget = { files: MAX_TRANSCR
     } else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(file);
   }
   return out;
-}
-
-function claudeProjectSlug(value) {
-  return path.resolve(value).replaceAll(path.sep, '-');
 }
 
 async function pathVariants(value) {

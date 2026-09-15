@@ -359,9 +359,9 @@ test('collectClaude updates managed native id from actual hook session and repor
 test('collectClaude project-scoped fallback requires bounded cwd match and works without all=true', async t => {
   const root = await tmp(t);
   const home = path.join(root, 'claude-home');
-  const project = path.join(root, 'project');
-  const sibling = path.join(root, 'project-sibling');
-  const worktree = path.join(root, 'state-worktree');
+  const project = path.join(root, 'project_测试.v1');
+  const sibling = path.join(root, 'project_测试.v1-sibling');
+  const worktree = path.join(root, 'state_worktree');
   const projectDir = path.join(home, 'projects', claudeProjectSlug(project));
   const worktreeDir = path.join(home, 'projects', claudeProjectSlug(worktree));
   const unrelatedDir = path.join(home, 'projects', 'p');
