@@ -1,0 +1,246 @@
+# Execution profiles and routing
+
+> 中文: [zh-CN/execution-profiles.md](zh-CN/execution-profiles.md)
+
+Execution profiles let CAO run a task through a selected native agent and model without rewriting your global provider configuration. A profile describes one agent, protocol, endpoint, model, credential reference, routing metadata, and capacity hints. When a profiled task starts, CAO creates a local relay gateway, writes private per-attempt runtime configuration, launches the native CLI through Herdr, and cleans up the CAO-owned files after the worker stops.
+
+Legacy tasks still work. If a task has no `execution` selector and no default profile, CAO launches the requested `agent` with its inherited native configuration, as in the original workflow. If a default profile exists, CAO applies it to legacy tasks only when it is compatible with the task agent. Use `agent: "auto"` only with an explicit `execution` selector or with a default profile.
+
+## Requirements
+
+Profiled execution uses the same base requirements as CAO plus the native CLI you want to drive:
+
+- Node.js 22.13 or newer.
+- Herdr on `PATH`.
+- One configured native agent CLI: Claude Code, Codex CLI, Pi, or OpenCode.
+- A state directory shared by commands that should see the same profiles, reservations, gateways, and runs.
+
+CAO does not install native CLIs or providers. It starts them with generated local configuration that points at CAO's relay gateway.
+
+## Profile schema
+
+A stored profile is JSON. `profile put` adds CAO metadata such as revision and timestamps; `profile export` removes those controlled metadata fields so the output can be imported again.
+
+```json
+{
+  "id": "claude-sonnet-api",
+  "name": "Claude Sonnet via API",
+  "agent": "claude",
+  "model": "claude-sonnet-4-5",
+  "protocol": "anthropic",
+  "endpoint": "https://api.anthropic.com/v1",
+  "credential": { "type": "stored", "ref": "stored:anthropic-main", "authScheme": "api-key" },
+  "source": { "type": "native" },
+  "enabled": true,
+  "capabilities": ["shell"],
+  "priority": 0,
+  "account": { "id": "anthropic-main", "maxParallel": 1 },
+  "quota": { "state": "unknown", "observedAt": null, "expiresAt": null, "remainingTokens": null },
+  "quality": 80,
+  "speed": 60,
+  "costPerMillion": null,
+  "modelMap": {},
+  "fallbacks": []
+}
+```
+
+Important fields:
+
+| Field | Meaning |
+| --- | --- |
+| `agent` | Native CLI to launch: `claude`, `codex`, `pi`, or `opencode`. |
+| `protocol` | Relay wire protocol: `anthropic`, `openai-responses`, or `openai-chat`. The profile must be compatible with the selected agent. |
+| `endpoint` | Upstream base URL. It must be `http` or `https` and cannot contain userinfo, query, or fragment. `credential.type: "none"` is accepted only for loopback endpoints. |
+| `credential` | A reference to a secret, never the secret value. Types are `env`, `stored`, `cc-switch`, and `none`. For Anthropic upstreams, `authScheme: "bearer"` sends `Authorization: Bearer`; omitted or `api-key` sends `x-api-key`. |
+| `source` | Where the profile came from. `native` is user-authored. `cc-switch` stores the source directory, provider id, app, route, and fingerprint used for drift checks. |
+| `capabilities` | Manual labels used by `requireCapabilities`; CAO does not infer these from the provider. |
+| `quality`, `speed`, `costPerMillion` | Manual routing scores. `quality` and `speed` rank higher values first. `cost` requires a known nonnegative value and ranks lower cost first. |
+| `quota` | A manual or observed hint with expiry. It is not a live platform balance unless you update it from such a source. Stale quota data is reported but does not block by itself. |
+| `account.maxParallel` | CAO attempt reservation limit for profiles sharing the same `account.id`, or for the same endpoint host when no account id is set. It does not limit native child agents or API requests inside one attempt. |
+| `modelMap` | Gateway request model rewrite map. If the request body asks for a key in the map, CAO forwards the mapped upstream model; otherwise it forwards `profile.model`. |
+| `fallbacks` | Up to eight profile ids used by a gateway after the primary profile. Fallback profiles must use the same protocol and pass eligibility checks. |
+
+Stored profile records are validated on every read. CAO rejects unknown secret-like fields, invalid revisions, non-normalized JSON, unsafe env names, symlinked stored secret files, and header-unsafe secret values.
+
+## Managing profiles
+
+All commands accept `--state-dir PATH` when you want a non-default profile store.
+
+```bash
+node bin/cao.mjs profile put --file profile.json --default
+node bin/cao.mjs profile list
+node bin/cao.mjs profile show --id claude-sonnet-api
+node bin/cao.mjs profile default
+node bin/cao.mjs profile default --id claude-sonnet-api
+node bin/cao.mjs profile default --clear
+node bin/cao.mjs profile clone --id claude-sonnet-api --new-id claude-copy
+node bin/cao.mjs profile export --id claude-sonnet-api --file exported-profile.json
+node bin/cao.mjs profile remove --id claude-copy
+```
+
+`profile put --default` writes the profile and makes it the default. `profile export --file` uses exclusive create, so it will not overwrite an existing file.
+
+## Secrets
+
+Never put secret values in profile JSON or command arguments. Store a local secret from stdin:
+
+```bash
+printf '%s\n' "$ANTHROPIC_API_KEY" | node bin/cao.mjs secret set --id anthropic-main --stdin
+node bin/cao.mjs secret remove --id anthropic-main
+```
+
+The command trims one final newline, stores a private file under the CAO state directory, and returns a reference such as `stored:anthropic-main`. Secret values are rejected if they are empty, contain control characters, or exceed 64 KiB. CAO also supports environment references:
+
+```json
+{ "type": "env", "name": "ANTHROPIC_API_KEY" }
+```
+
+Environment names must be valid shell-style variable names. CC Switch imports use `credential.type: "cc-switch"` with a private database field reference; the profile does not contain the key.
+
+## Discovering and importing CC Switch profiles
+
+CAO can read a CC Switch database without changing it:
+
+```bash
+node bin/cao.mjs source discover
+node bin/cao.mjs source discover --directory ~/.cc-switch
+```
+
+The first implementation supports the real CC Switch 3.20.x schema with `PRAGMA user_version = 18`. It reads `providers` and `proxy_config` in read-only mode.
+
+Supported imports in this version:
+
+- Claude direct API records whose `settings_config.env` contains `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`.
+- `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `DEFAULT_SONNET_MODEL`, and Anthropic default model fields when present.
+- Explicit reuse of the current active Claude proxy only when you pass `--allow-shared`.
+
+Unsupported in this version:
+
+- OAuth-only CC Switch records as direct profiles.
+- Codex, Pi, OpenCode, or other CC Switch client records as direct profiles.
+- Automatic CC Switch switching or writes to the CC Switch database.
+
+Import examples:
+
+```bash
+node bin/cao.mjs profile import-cc-switch \
+  --provider claude-main \
+  --app claude \
+  --id claude-main
+
+node bin/cao.mjs profile import-cc-switch \
+  --directory ~/.cc-switch \
+  --provider claude-current \
+  --app claude \
+  --id claude-shared-proxy \
+  --allow-shared
+```
+
+`ANTHROPIC_AUTH_TOKEN` imports as `authScheme: "bearer"`; `ANTHROPIC_API_KEY` imports as `authScheme: "api-key"`. `profile refresh --id ID` re-imports an existing CC Switch profile and checks the source fingerprint. Source fingerprints intentionally exclude secret values; public config drift is detected, but rotating the secret value alone does not change the fingerprint.
+
+## Selecting profiles for tasks
+
+A task may use a fixed profile:
+
+```json
+{
+  "id": "typed-change",
+  "objective": "Update the type definitions and tests.",
+  "agent": "auto",
+  "execution": { "profile": "codex-fast" },
+  "allowedPaths": ["src/types/", "tests/types.test.mjs"],
+  "checks": [{ "name": "types", "argv": ["npm", "test", "--", "tests/types.test.mjs"] }]
+}
+```
+
+A task may also ask CAO to choose among candidate profiles:
+
+```json
+{
+  "id": "docs-pass",
+  "objective": "Improve the docs for profile routing.",
+  "agent": "auto",
+  "execution": {
+    "policy": "quality",
+    "profiles": ["claude-main", "codex-fast", "opencode-local"],
+    "requireCapabilities": ["shell"]
+  },
+  "allowedPaths": ["README.md", "docs/"],
+  "checks": [{ "name": "syntax", "argv": ["npm", "run", "check"] }]
+}
+```
+
+Selector fields:
+
+| Field | Meaning |
+| --- | --- |
+| `profile` | Fixed profile id. Cannot be combined with `policy` or `profiles`. |
+| `policy` | Automatic policy: `available`, `quality`, `speed`, or `cost`. Defaults to `available`. |
+| `profiles` | Candidate profile ids for automatic routing. |
+| `requireCapabilities` | Required manual capability labels. |
+| `allowShared` | Required for profiles using a shared source such as an active CC Switch proxy. |
+
+If `agent` is a concrete value, routing only accepts profiles with the same agent. If `agent` is `auto`, CAO can choose any compatible candidate. A default profile is applied to old-style tasks without changing the task definition; because the old task still has a concrete agent, the default must match that agent unless the task uses `agent: "auto"`.
+
+Use route explain before dispatching:
+
+```bash
+node bin/cao.mjs route explain --file work/task.json
+node bin/cao.mjs route reservations
+```
+
+The route decision reports candidates, scores, reasons, and the selected profile id. `route reservations` lists active CAO attempt reservations separately; availability may change between explanation and dispatch. Reasons such as `quota_exhausted`, `credential_unavailable`, `agent_mismatch`, `protocol_incompatible`, and `shared_source_requires_allowShared` describe routing eligibility only.
+
+## Gateway lifecycle
+
+A profiled task starts a local CAO gateway automatically. You can also manage one manually:
+
+```bash
+node bin/cao.mjs gateway start --profile claude-main --id manual-claude
+node bin/cao.mjs gateway status --id manual-claude
+node bin/cao.mjs gateway list
+node bin/cao.mjs gateway stop --id manual-claude
+```
+
+The gateway is a same-protocol relay. It supports Anthropic Messages paths, OpenAI Responses paths, and OpenAI Chat Completions paths. It forwards to profiles that share the same protocol and rewrites the request model according to `modelMap` or `profile.model`. It does not perform OAuth, convert Anthropic to OpenAI or OpenAI to Anthropic, or hide protocol incompatibility. For external gateways, use a compatible endpoint and protocol in the profile; CAO still treats it as an upstream relay target.
+
+Fallback is conservative. CAO may try another profile after a clear pre-send network failure or an upstream 429/5xx response. If bytes may already have reached an upstream and the connection then breaks, CAO treats the result as uncertain rather than assuming it is safe to retry against another provider.
+
+Gateway start refuses disabled profiles, fresh exhausted quotas, incompatible fallback protocols, remote `credential.type: "none"`, shared sources without `allowShared`, and missing required capabilities. `gateway stop` refuses to stop a gateway still referenced by active attempts.
+
+## Native runtime configuration
+
+CAO writes per-attempt private files and passes native CLI options that point each agent at the local gateway:
+
+| Agent | Configuration mode |
+| --- | --- |
+| Claude Code | Writes `claude-settings.json`, sets Anthropic env keys, passes `--settings`, `--model`, and `--session-id`. |
+| Codex CLI | Uses command-backed auth for the gateway token and `-c` overrides for `model`, `model_provider`, and `model_providers.<name>`. This is designed for Codex CLI 0.154-style command auth while leaving global config alone. |
+| Pi | Writes a provider extension and starts Pi with `--extension`, `--provider`, `--model`, and `--session-id`. |
+| OpenCode | Sets `OPENCODE_CONFIG_CONTENT` with inline provider config and passes `--model`. |
+
+Profiled tasks reject native arguments that would conflict with profile-owned model, provider, session, config, or worktree settings. Some safe Codex reasoning and verbosity `-c` overrides are allowed.
+
+## Cleanup and boundaries
+
+Profiled execution avoids global config mutation, but it is still not a sandbox. The native CLI can run whatever tools and subagents it normally can run under your local permissions.
+
+CAO cleans up unchanged private execution files after the worker stops. If a file was modified, replaced, or its ownership marker changed, CAO retains it and records cleanup evidence. Gateway logs and attempt evidence remain in the state directory.
+
+Routing and capacity limits are CAO attempt controls. `account.maxParallel` limits simultaneously active CAO attempts in the same bucket. It does not limit native child agents, provider-side concurrency, HTTP connections, or API requests made inside one attempt.
+
+## Current validation evidence
+
+Profiled execution has been smoke-checked with Herdr 0.9+ using two Claude sessions and a local simulated Anthropic API. The check used two profiles with different models and keys, exercised Read/Write/Bash/tool-result submission, accepted both tasks independently, matched 16 gateway requests, confirmed global provider files were unchanged, and released runtime resources. This verifies local orchestration and configuration isolation for that scenario; it is not a real model-quality or provider-billing test.
+
+Codex CLI 0.154.0 and Pi 0.85.1 also passed native CLI profile request checks against local mock Responses and Chat Completions APIs. These used isolated native test directories and verified model selection and gateway authentication, not full Herdr task lifecycles. OpenCode was not installed for live validation.
+
+To reproduce the two-session Claude check:
+
+```bash
+npm run smoke:profiles
+```
+
+This opt-in script needs Herdr and Claude Code. It creates its own Git fixture, confirms that fixture's native directory-trust prompt, runs against a local mock API, and retains evidence under `work/profile-smoke-*`. It does not require a paid upstream API call. Native CLIs may still perform their normal background network requests and write history/session state; CAO preserves the existing native home so installed skills and extensions stay available.
+
+The relay currently limits request bodies to 16 MiB and upstream socket inactivity to 120 seconds. Standalone gateways do not reserve CAO attempt slots. Gateway ids are immutable evidence ids; start a new id after stopping one. Running attempts keep their resolved snapshots. `profile refresh` updates imported connection fields for future attempts while preserving CAO routing metadata.

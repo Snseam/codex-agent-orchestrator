@@ -21,7 +21,7 @@ CAO owns only the runs, attempts, Herdr session, workspaces/panes, and evidence 
 
 ## CLI layer: `bin/cao.mjs`
 
-The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, `doctor`, and `usage`.
+The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported run stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, `doctor`, and `usage`. Profiled execution adds `source discover`, `profile ...`, `secret ...`, `route ...`, and `gateway ...` commands.
 
 Key semantics:
 
@@ -31,12 +31,26 @@ Key semantics:
 - `integrate` applies a verified worktree patch to the target checkout and reruns checks there.
 - `recover` rechecks retained checkout state. It does not rerun a worker and does not apply the same patch again.
 
+## Execution profile layer: `src/profiles.mjs`, `src/routing.mjs`, `src/gateway/*`, `src/execution-config.mjs`
+
+Profiles are optional execution selectors stored under the CAO state root. They describe a native agent, protocol, endpoint, model, credential reference, source, manual capabilities, manual quality/speed/cost hints, quota hints, fallback ids, and CAO attempt capacity buckets. `get` and `list` validate stored profile JSON before returning it, including schema version, revision hash, normalized public fields, and secret-like field rejection. Secret values are stored separately or read from environment/CC Switch references and are validated before use in HTTP headers.
+
+Routing accepts either a fixed profile or an automatic candidate list with policy `available`, `quality`, `speed`, or `cost`. A concrete task agent filters profiles by agent compatibility. `agent: auto` allows the selected profile to determine the native agent. A default profile behaves like an execution selector for legacy tasks that omit `execution`; it can also satisfy an `agent: auto` legacy task.
+
+Reservations are CAO-attempt limits. A profile with `account.id` reserves an `account:<id>` bucket; otherwise CAO reserves by endpoint host. `account.maxParallel` limits active CAO attempts in that bucket and does not limit native children, provider-side API concurrency, or HTTP requests made inside one worker.
+
+The gateway is a same-protocol local relay for Anthropic, OpenAI Responses, or OpenAI Chat profiles. It rewrites request model names using `modelMap` or `profile.model`, injects the resolved secret into upstream auth headers, filters protected headers, and can use same-protocol fallbacks. It does not perform OAuth or protocol translation. Fallback is conservative: CAO may retry on clear pre-send network failures or upstream 429/5xx responses, but a connection break after bytes may have reached upstream is treated as uncertain rather than safely retryable.
+
+`prepareExecution` writes per-attempt private native configuration and never mutates global provider files. Claude Code receives a generated settings file and session id; Codex CLI receives command-backed auth and `-c` provider overrides; Pi receives a provider extension; OpenCode receives inline config through `OPENCODE_CONFIG_CONTENT`. Profile-owned native arguments are rejected before launch.
+
+The CC Switch source adapter is read-only. The first implementation supports schema version 18 direct Claude API records in `settings_config.env` and explicit `allowShared` reuse of the active Claude proxy. OAuth-only and non-Claude client records are surfaced as unsupported or gateway-required, not imported as direct profiles.
+
 ## Orchestrator: `src/orchestrator.mjs`
 
 The orchestrator is the state machine and coordination layer.
 
 - `init` resolves the Git root, records the base commit, baseline snapshot, initial dirty state, maximum parallelism, and a CAO-owned Herdr session.
-- `dispatch` validates a task, checks dependencies and holds, reserves an attempt, prepares worktree or checkout isolation, starts Herdr server/workspace/agent, records identity, writes `prompt.txt`, and sends a short dispatch prompt.
+- `dispatch` validates a task, checks dependencies and holds, resolves any execution profile selector or default profile, reserves profile capacity, starts a gateway when profiled, prepares worktree or checkout isolation, starts Herdr server/workspace/agent, records identity, writes `prompt.txt`, and sends a short dispatch prompt.
 - `collect` observes the Herdr agent, reads the result JSON, validates task/attempt/nonce, validates reported children, checks changed paths against the task scope, and saves terminal output.
 - `verify` closes the owned worker, runs task checks independently, writes `check-*.json` and `verification.json`, and for accepted worktree tasks creates `candidate.patch`.
 - `retry` creates a new attempt with a new nonce, reuses the previous candidate cwd, and carries failed evidence/feedback into the next `prompt.txt`.
@@ -74,12 +88,12 @@ JSON writes use a temporary file and atomic rename. Locks are directory locks wi
 
 The full assignment is written to `prompt.txt`: objective, allowed paths, checks, native instructions, child-reporting contract, and result JSON skeleton. `dispatch` sends a short entry prompt asking the worker to read `prompt.txt` and execute the contract.
 
-Adapters preserve provider settings:
+In inherited mode, adapters preserve provider settings:
 
 - `claude` starts Herdr kind `claude` and prepends `--add-dir <attemptDirectory>` before task `agentArgs`.
 - `pi`, `opencode`, and `codex` pass task `agentArgs` through unchanged to Herdr `agent start`.
 
-`maxChildren` is a reporting contract only. CAO validates the number and status values in result JSON; it does not observe or enforce native children/subagents and has no MCP/daemon child telemetry.
+`maxChildren` is a reporting contract only. CAO validates the number and status values in result JSON; it does not observe or enforce native children/subagents and has no MCP/daemon child telemetry. Profiled mode adds temporary native configuration through `src/execution-config.mjs`; see [execution profiles](execution-profiles.md).
 
 ## Herdr runtime: `src/runtime/herdr.mjs`
 
@@ -114,6 +128,10 @@ Untracked ignored files are not part of snapshots, changed paths, candidate patc
 Checks are spawned from argv arrays, never through a shell. Each check runs in either the candidate cwd or the target project cwd and observes its own `timeoutMs`. Timeout or cancellation kills the process group CAO started. Captured output is bounded and written into evidence JSON.
 
 Verification commands are expected not to edit source files. `verify` and `integrate` compare snapshots before and after checks; if checks mutate source state, the attempt fails or remains held for recovery.
+
+## Current validation evidence
+
+The base workflow has local tests and Claude Code live-scenario coverage. Profiled execution has been smoke-checked with Herdr 0.9+ using two Claude sessions against a local simulated Anthropic API: two profiles with separate models and keys completed Read/Write/Bash/tool-result submission, both candidates were independently accepted, 16 gateway requests matched expectations, global provider files stayed unchanged, and runtime resources were released. This is integration evidence for local orchestration, not real model-quality or billing evidence.
 
 ## Token usage: `src/usage.mjs`, `src/runtime/tokscale.mjs`
 

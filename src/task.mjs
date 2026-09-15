@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { OrchestratorError } from './errors.mjs';
 import { validateId } from './state.mjs';
+import { validateExecution } from './routing.mjs';
 
 const KNOWN_KEYS = new Set([
   'id',
@@ -16,9 +17,10 @@ const KNOWN_KEYS = new Set([
   'maxChildren',
   'maxAttempts',
   'dependsOn',
+  'execution',
 ]);
 
-const AGENTS = new Set(['claude', 'pi', 'opencode', 'codex']);
+const AGENTS = new Set(['claude', 'pi', 'opencode', 'codex', 'auto']);
 const ISOLATIONS = new Set(['worktree', 'checkout']);
 const GLOB_CHARS = /[*?[\]{}]/;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -173,9 +175,10 @@ export function validateTask(object) {
 
   const id = validateId(object.id);
   const objective = requireString(object.objective, 'objective', { nonempty: true });
-  const agent = object.agent ?? 'claude';
+  const execution = object.execution === undefined ? null : validateExecution(object.execution);
+  const agent = object.agent ?? (execution ? 'auto' : 'claude');
   if (!AGENTS.has(agent)) {
-    throw taskError('invalid_task', 'agent must be claude, pi, opencode, or codex', { agent });
+    throw taskError('invalid_task', 'agent must be claude, pi, opencode, codex, or auto', { agent });
   }
 
   const role = object.role === undefined ? 'implementer' : requireString(object.role, 'role', { nonempty: true });
@@ -209,6 +212,7 @@ export function validateTask(object) {
     maxChildren,
     maxAttempts,
     dependsOn,
+    ...(execution ? { execution } : {}),
   };
 }
 

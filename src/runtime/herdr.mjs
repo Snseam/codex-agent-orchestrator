@@ -223,6 +223,21 @@ export class Herdr {
     return this.json(argv, { timeoutMs: 45000 });
   }
 
+  async prepareEnvironment(session, pane, manifest) {
+    validateSession(session);
+    await this.runInPane(session, pane, manifest.bootstrap);
+    const result = await this.runner([this.binary, '--session', session, 'pane', 'wait-output', '--match', manifest.readyMarker, '--source', 'recent-unwrapped', '--timeout', '10000', pane], { timeoutMs: 15000, env: cleanHerdrEnv() });
+    if (result.code !== 0) throw new OrchestratorError('execution_environment_failed', 'The owned pane did not confirm its isolated environment.');
+    return { prepared: true };
+  }
+
+  async runInPane(session, pane, command) {
+    validateSession(session);
+    const result = await this.runner([this.binary, '--session', session, 'pane', 'run', pane, command], { timeoutMs: 10000, env: cleanHerdrEnv() });
+    if (result.code !== 0) throw new OrchestratorError('execution_environment_failed', 'Could not send the execution bootstrap to its owned pane.');
+    return { sent: true };
+  }
+
   getAgent(session, name) {
     validateSession(session);
     return this.json(['--session', session, 'agent', 'get', name]);

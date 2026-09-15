@@ -78,6 +78,28 @@ async function workspaceKeys(client, cwd) {
   return { keys: values, canonical };
 }
 
+
+function attemptAgent(task, attempt) {
+  return attempt?.execution?.agent || task.definition.agent;
+}
+
+function taskAgents(task) {
+  return [...new Set((task.attempts || []).map(attempt => attemptAgent(task, attempt)).filter(agent => usageClients.includes(agent)))];
+}
+
+function taskMatchesClients(task, clients) {
+  const agents = taskAgents(task);
+  if (agents.length) return agents.some(agent => clients.includes(agent));
+  return task.definition.agent === 'auto' && clients.length === usageClients.length;
+}
+
+function coverageAgent(task, clients) {
+  const agents = taskAgents(task).filter(agent => clients.includes(agent));
+  if (agents.length === 1) return agents[0];
+  if (agents.length > 1) return 'multiple';
+  return task.definition.agent;
+}
+
 function warningCount(report) {
   return (report.warnings?.length || 0) + (report.diagnostics?.filter(d => ['warning', 'error'].includes(d.severity)).length || 0);
 }
@@ -101,8 +123,8 @@ export class UsageService {
       invariant(run.schemaVersion === 1 && run.tasks && typeof run.tasks === 'object' && !Array.isArray(run.tasks), 'invalid_run', 'Run record is invalid.');
       if (options.taskId) invariant(Object.hasOwn(run.tasks, options.taskId), 'task_not_found', `Task ${options.taskId} does not exist.`);
       allTasks = Object.values(run.tasks);
-      invariant(allTasks.every(t => t?.definition?.id && usageClients.includes(t.definition.agent) && ['worktree', 'checkout'].includes(t.definition.isolation) && Array.isArray(t.attempts) && t.attempts.every(a => a && (a.cwd === null || a.cwd === undefined || typeof a.cwd === 'string'))), 'invalid_run', 'Task records are invalid.');
-      tasks = allTasks.filter(t => (!options.taskId || t.definition.id === options.taskId) && options.clients.includes(t.definition.agent));
+      invariant(allTasks.every(t => t?.definition?.id && (usageClients.includes(t.definition.agent) || t.definition.agent === 'auto') && ['worktree', 'checkout'].includes(t.definition.isolation) && Array.isArray(t.attempts) && t.attempts.every(a => a && (a.cwd === null || a.cwd === undefined || typeof a.cwd === 'string') && (a.execution?.agent === undefined || usageClients.includes(a.execution.agent)))), 'invalid_run', 'Task records are invalid.');
+      tasks = allTasks.filter(t => (!options.taskId || t.definition.id === options.taskId) && taskMatchesClients(t, options.clients));
     }
 
     const version = await this.tokscale.version();
@@ -127,22 +149,26 @@ export class UsageService {
 
     const owners = new Map(), expectedWorkspaces = new Map();
     for (const task of allTasks) {
-      const client = task.definition.agent;
       expectedWorkspaces.set(task.definition.id, new Set());
-      for (const cwd of new Set(task.attempts.map(a => a.cwd).filter(c => typeof c === 'string' && path.isAbsolute(c)))) {
+      for (const attempt of task.attempts) {
+        const client = attemptAgent(task, attempt);
+        if (!usageClients.includes(client) || !options.clients.includes(client)) continue;
+        const cwd = attempt.cwd;
+        if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) continue;
         const workspace = await workspaceKeys(client, cwd);
-        expectedWorkspaces.get(task.definition.id).add(workspace.canonical);
+        expectedWorkspaces.get(task.definition.id).add(`${client}\0${workspace.canonical}`);
         for (const key of workspace.keys) {
           const ownerKey = `${client}\0${key}`;
           if (!owners.has(ownerKey)) owners.set(ownerKey, new Map());
           const known = owners.get(ownerKey);
-          if (!known.has(task.definition.id)) known.set(task.definition.id, { taskId: task.definition.id, isolation: task.definition.isolation, cwds: new Set() });
-          known.get(task.definition.id).cwds.add(workspace.canonical);
+          const taskAgentKey = `${task.definition.id}\0${client}`;
+          if (!known.has(taskAgentKey)) known.set(taskAgentKey, { taskId: task.definition.id, agent: client, isolation: task.definition.isolation, cwds: new Set() });
+          known.get(taskAgentKey).cwds.add(`${client}\0${workspace.canonical}`);
         }
       }
     }
     const selected = new Set(tasks.map(t => t.definition.id));
-    const clients = [...new Set(tasks.map(t => t.definition.agent))];
+    const clients = [...new Set(tasks.flatMap(taskAgents).filter(agent => options.clients.includes(agent)))];
     const rows = [], sharedWorkspaces = [], ambiguousWorkspaces = [];
     const matched = new Map(tasks.map(t => [t.definition.id, new Set()]));
     let sourceWarningCount = 0;
@@ -152,7 +178,7 @@ export class UsageService {
       sourceWarningCount += warningCount(report);
       for (const entry of report.entries.filter(matchesModel)) {
         const known = owners.get(`${client}\0${normalizePath(entry.workspaceKey) || entry.workspaceKey}`);
-        if (!known || ![...known.keys()].some(id => selected.has(id))) continue;
+        if (!known || ![...known.values()].some(owner => selected.has(owner.taskId))) continue;
         const candidates = [...known.values()];
         const taskIds = candidates.map(t => t.taskId).sort();
         if (candidates.some(t => t.isolation === 'checkout')) {
@@ -169,8 +195,8 @@ export class UsageService {
       const count = matched.get(task.definition.id).size;
       const expected = expectedWorkspaces.get(task.definition.id).size;
       return {
-        taskId: task.definition.id, agent: task.definition.agent,
-        status: task.definition.isolation === 'checkout' ? 'shared_checkout' : !count ? 'no_matching_records' : count === expected ? 'workspace_matched' : 'partial_workspace_match',
+        taskId: task.definition.id, agent: coverageAgent(task, options.clients),
+        status: task.definition.isolation === 'checkout' ? 'shared_checkout' : expected === 0 ? 'workspace_unavailable' : !count ? 'no_matching_records' : count === expected ? 'workspace_matched' : 'partial_workspace_match',
         attempts: task.attempts.length, expectedWorkspaces: expected, matchedWorkspaces: count,
       };
     });
