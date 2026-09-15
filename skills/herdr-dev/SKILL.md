@@ -5,6 +5,8 @@ description: Coordinate authorized development through the local Codex Agent Orc
 
 # Herdr development coordination
 
+For the installable **CAO** skill and per-conversation activation, use [the CAO entrypoint](../cao/SKILL.md) and the repository's `skill install` command. This legacy draft remains available to existing manual-workflow prompts.
+
 Use the installed CAO CLI, or this repository's `bin/cao.mjs`. Resolve its absolute path once; when the skill is read from this repository it is `../../bin/cao.mjs` relative to this folder. If the skill has been copied elsewhere, locate the existing CAO checkout or executable instead of assuming the relative path still works. Read the CLI `--help` and the repository README for the current manifest schema. This is a repository skill draft; it does not install or register itself.
 
 ## Plan useful independent work

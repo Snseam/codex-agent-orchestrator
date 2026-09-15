@@ -8,6 +8,9 @@ test('CLI exposes help and validates command arguments', () => {
   assert.throws(() => parseArgs(['verify', '--wat', 'x']), /Unknown option/);
   assert.throws(() => parseArgs(['status', '--run']), /Missing value/);
   assert.throws(() => parseArgs(['status', '--run', 'a', '--run', 'b']), /Duplicate option/);
+  assert.deepEqual(parseArgs(['skill', 'install', '--skills-dir', '/tmp/codex skills']).command, 'skill install');
+  assert.deepEqual(parseArgs(['mode', 'enable', '--thread', 'thread-1', '--max-parallel', '2']).command, 'mode enable');
+  assert.throws(() => parseArgs(['skill', 'install', '--run', 'x']), /Unknown option/);
   const r = spawnSync(process.execPath, ['bin/cao.mjs', 'unknown'], { encoding: 'utf8' });
   assert.equal(r.status, 2);
   assert.equal(JSON.parse(r.stderr).error.code, 'invalid_arguments');

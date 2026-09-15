@@ -9,6 +9,8 @@ Codex Agent Orchestrator (CAO) is an explicit CLI controller. It is not a backgr
 ```text
 User / Codex App
   -> node bin/cao.mjs <command>
+      -> skill install/status/uninstall -> user skill link
+      -> mode enable/status/disable -> conversation preference record
       -> Orchestrator
           -> State store
           -> Git / worktree / patch layer
@@ -34,6 +36,12 @@ Key semantics:
 - `recover` rechecks retained checkout state. It does not rerun a worker and does not apply the same patch again.
 - `monitor start --project <path> --open` starts a localhost, read-only dashboard. If `--project` is omitted, the CLI uses the current working directory's Git root. `--run` scopes the view to one CAO run. `--all` is explicit and mutually exclusive with `--project` and `--run`.
 - `monitor status`, `monitor stop`, and `monitor snapshot` inspect or stop the monitor server. Stopping the monitor does not stop agents. `--id` selects a named monitor, and `--port` selects or auto-allocates the localhost port.
+
+## Codex skill and conversation mode
+
+`skills/cao` is the installable entrypoint, with `CAO` as its display name. `src/skills.mjs` links it into the user's skill directory and protects conflicting paths; updates follow the checkout. The wrapper resolves its real source path before invoking the CLI, retaining the target project's working directory. Installation is separate from conversation activation.
+
+`src/conversation-mode.mjs` stores validated preferences under `conversations/<thread-id>/mode.json` in the CAO state root. Identity comes from an explicit thread ID or the calling Codex environment. Updates use file locks and atomic writes; two conversations sharing a project still have separate records. The skill reads this record and supplies the selected agent/profile and limits while driving CAO. The mode record does not change standalone CLI defaults, intercept model decisions, schedule work, or cancel workers when disabled. See [the CAO skill guide](codex-skill.md).
 
 ## Execution profile layer: `src/profiles.mjs`, `src/routing.mjs`, `src/gateway/*`, `src/execution-config.mjs`
 

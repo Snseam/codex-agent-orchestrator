@@ -9,6 +9,8 @@ CAO 是一个显式驱动的 CLI 控制器。它不是后台编排 daemon，不�
 ```text
 用户/Codex App
   -> node bin/cao.mjs <command>
+      -> skill install/status/uninstall -> 用户技能链接
+      -> mode enable/status/disable -> 对话偏好记录
       -> Orchestrator
           -> State store
           -> Git/worktree/patch
@@ -34,6 +36,12 @@ CLI 负责参数解析、读取任务文件、创建 `Orchestrator` 和输出 JS
 - `recover` 只复验已保留在 checkout 中的恢复场景：incomplete integration 不再次 apply patch；stopped checkout 任务按当前 checkout 重新验收。
 - `monitor start --project <path> --open` 启动 localhost 只读看板。省略 `--project` 时，CLI 使用当前工作目录的 Git root。`--run` 限定到一个 CAO run；`--all` 必须显式指定，并且与 `--project`、`--run` 互斥。
 - `monitor status`、`monitor stop` 和 `monitor snapshot` 用于查看或停止 monitor server。停止 monitor 不会停止 agent。`--id` 选择命名 monitor，`--port` 指定或自动分配 localhost 端口。
+
+## Codex 技能与对话模式
+
+`skills/cao` 是可安装的技能入口，显示名为 `CAO`。`src/skills.mjs` 将它链接到用户技能目录，保护已有同名内容；更新跟随仓库。包装脚本解析实际来源位置后调用 CLI，并保持目标项目的工作目录。安装和启用某个对话是两个独立操作。
+
+`src/conversation-mode.mjs` 在 CAO 状态根的 `conversations/<thread-id>/mode.json` 保存经过校验的偏好，身份来自显式 thread ID 或调用方 Codex 环境。更新使用文件锁和原子写入；同项目的两个对话也有各自记录。技能读取记录，将 Agent/profile 和数量限制带入 CAO 工作流。该记录不会改变独立 CLI 命令默认值、拦截模型决策或调度任务；停用偏好也不会取消 worker。详见 [CAO 技能指南](codex-skill.md)。
 
 ## 执行 Profile 层：`src/profiles.mjs`、`src/routing.mjs`、`src/gateway/*`、`src/execution-config.mjs`
 

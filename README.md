@@ -16,54 +16,57 @@ Codex Agent Orchestrator (**CAO**) is a local, zero-dependency Node.js CLI for c
 
 ## Start in Codex
 
-**Paste once, then describe your work normally.** This tells Codex to use CAO by default for subsequent development tasks in that conversation. You do not need to write task JSON, run the CLI yourself, or globally install a skill.
+**Install once, then activate CAO in any new or existing local conversation.** Codex creates the task files, delegates development, checks the results, and integrates accepted changes for you.
 
-1. Open a **new or existing local conversation** in Codex App or Codex CLI with access to your project files and terminal.
-2. Copy the entire prompt below. Keep the defaults, or edit the project, agent, and limits to suit your work.
-3. After Codex reports that setup is ready, send your development request. You can also append the first request to the same message.
+### 1. Copy this installation request into Codex
 
 ```text
-Use Codex Agent Orchestrator (CAO) by default for development tasks in this conversation from now on, until I ask to turn it off. Keep this preference scoped to this conversation.
+Install the official Codex Agent Orchestrator (CAO) skill for my Codex:
+https://github.com/Snseam/codex-agent-orchestrator
 
-Project: use the current project; ask for its path only if unclear.
-Worker agent: use an existing compatible CAO profile when configured; otherwise use my configured Claude Code.
-Maximum concurrent external sessions: 2.
-Maximum attempts per task: 3.
+Find and reuse my local CAO checkout. If none exists, clone the repository into an unused, durable directory outside the target project. Preserve existing files and uncommitted changes.
+Read its README.md and skills/cao/SKILL.md. Check Node.js 22.13+ and the CLI help, then run:
+node <absolute-checkout-path>/bin/cao.mjs skill install
+node <absolute-checkout-path>/bin/cao.mjs skill status
+node <absolute-checkout-path>/bin/cao.mjs doctor
 
-Set up the workflow:
-- Find and reuse my local CAO checkout. If absent, clone https://github.com/Snseam/codex-agent-orchestrator into an unused directory outside the target project, and report that path. Preserve existing files.
-- Read the checkout's README.md and skills/herdr-dev/SKILL.md, resolve bin/cao.mjs to an absolute path, and check --help and doctor. Use node with that CLI path; a global cao command or skill installation is not required.
-- Check the target Git repository, installed agents, and existing CAO profiles/default. Keep one shared CAO state directory outside the target project. If an essential dependency, login, initial Git commit, or permission is missing, explain the exact blocker and the smallest next step. Do not claim setup succeeded or silently switch workflows.
-- Preserve my native agent and CC Switch provider/authentication settings. Do not install dependencies or change global configuration just to activate this preference.
-
-For subsequent development requests:
-- You own requirements, task boundaries, acceptance checks, review, and integration. Generate task files and drive CAO yourself; delegate implementation through CAO-managed sessions.
-- Give independent work separate worktrees and clear owned paths. Respect dependencies; request useful native agent collaboration only when actually supported.
-- Drive dispatch → collect → verify. Use evidence to repair within the attempt limit, then integrate accepted changes and recheck the project. Terminal idle or an agent's success claim is not acceptance.
-- Inspect needs_input or uncertain outcomes before acting; never blindly replay an assignment. Stop and clean up owned sessions when finished or cancelled, retaining evidence.
-- Keep the resolved CLI path, project, state directory, run/task IDs, and this preference in your conversation handoff notes. After an interruption, inspect the recorded run before continuing.
-- Answer questions and planning requests directly without starting workers. If a requested development task cannot use CAO, explain why rather than quietly doing it another way. Respect later instructions and existing authorization for commits or publication.
-
-If I supplied no development task, only check readiness and report the resolved paths, selected agent/profile, and any blocker. Then wait for my next request.
+Verify that Codex discovers the user skill named cao with display name CAO. Reload the skill catalog if this existing conversation has a cached list. Report the installed path and any missing runtime prerequisites. A conflicting skill must be preserved, not overwritten.
+Only install the skill at this step; I will activate it in the conversations I choose. Keep my global AGENTS.md, provider/auth settings, and other conversations' preferences intact.
 ```
 
-Once ready, messages can be as simple as:
+Codex should report the installed skill path and readiness. The installation is a link to your CAO checkout, so keep that checkout in place; updating it also updates the skill. If a required tool or an existing skill conflicts with setup, Codex reports the concrete issue.
+
+### 2. Activate it in the conversation you want
+
+In **Codex App**, type:
+
+```text
+/CAO
+```
+
+**Select the CAO suggestion, then send the inserted skill mention.** In Codex CLI, use `$cao` or select CAO through `/skills`. A bare, unselected `/CAO` is not a universal CLI command.
+
+This records CAO as the default development workflow for **that conversation**, including an existing conversation with earlier messages. Initial defaults are two external sessions and three attempts per task; tell Codex when you want different limits or an agent/profile. Invoking CAO again preserves your saved choices.
+
+### 3. Describe your work normally
 
 ```text
 Add CSV import to this project. Handle duplicate rows and malformed files, add regression coverage, and finish integration with passing checks.
 ```
 
+You do not need to invoke CAO again before each development request. Codex reads the conversation's saved preference and drives the CAO workflow. Plain questions and planning requests are answered without starting workers. With no development task supplied, activation only checks readiness.
+
 | What you want | What to send in the same conversation |
 | --- | --- |
-| See progress | “Show the current CAO run, task states, and blockers.” |
+| See progress | “Show the current CAO mode, run, task states, and blockers.” |
 | Change the agent | “Use my configured Pi for subsequent CAO tasks; check compatibility first.” |
 | Handle one task directly | “For this task only, work directly without CAO.” |
-| Turn off the default | “Stop using CAO by default in this conversation. Inspect and safely stop any active CAO work first; keep its changes and evidence.” |
-| Restore the default | “Use CAO by default again for development tasks in this conversation.” |
+| Turn off the default | “Stop using CAO by default in this conversation.” |
+| Restore the default | Invoke CAO again. |
 
-This is a **conversation instruction**, not an account-wide setting or background scheduler. Paste it again in a different conversation. It does not promise continued orchestration after Codex stops running. To resume an existing run in another conversation, also provide its project, state directory, and run ID so Codex can inspect it before starting anything new.
+Each conversation has its own activation record. Installing the skill does not enable every conversation or create a background scheduler. To resume active work elsewhere, provide the original project, state directory, and run ID so Codex can inspect the existing run.
 
-The prompt can fetch CAO itself, but it still needs Node.js 22.13+, Git, Herdr, a configured supported agent, and a target repository with at least one commit. Codex reports missing prerequisites during setup. For a brand-new project, explicitly ask it to create the initial Git skeleton and commit first. See [manual CLI setup](#quick-start) or [execution profiles](docs/execution-profiles.md) for more control.
+Development still needs Node.js 22.13+, Git, Herdr, a configured supported agent, and a Git project with at least one commit. Skill installation can succeed before all development prerequisites are ready; Codex reports those separately. See the [CAO skill guide](docs/codex-skill.md) for install locations, updates, uninstalling, and older-client compatibility, or [manual CLI setup](#quick-start).
 
 ## Why CAO?
 
@@ -282,7 +285,7 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 | [Local Agent Monitor](docs/monitor.md) | Read-only local dashboard for CAO, Codex, and Claude metadata |
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
 | [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
-| [Codex skill draft](skills/herdr-dev/SKILL.md) | Guidance for driving CAO from Codex; not installed automatically |
+| [CAO Codex skill](docs/codex-skill.md) | One-prompt installation, `/CAO` activation, conversation preferences, and updates |
 | [Changelog](CHANGELOG.md) | Release history |
 | [中文文档](README.zh-CN.md) | Chinese overview and getting started |
 

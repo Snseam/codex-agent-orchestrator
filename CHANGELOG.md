@@ -6,6 +6,8 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Installable **CAO** Codex skill, a copyable README installation request, and `skill install/status/uninstall` commands with linked-checkout updates and conflict protection.
+- Per-conversation `mode enable/status/disable` preferences for continuing CAO development across turns, with independent project/agent/profile/limit settings and recovery notes. Desktop activation uses the `/CAO` skill suggestion; CLI supports `$cao` and `/skills`.
 - `usage` queries local Claude Code, Codex CLI, Pi, and OpenCode token records through optional Tokscale tooling (`>=4.16.0 <5`).
 - Agent/model/date filters, JSON or terminal-table output, and CAO run/task workspace attribution with explicit precision and coverage metadata.
 - Separate input, output, cache read/write, and reasoning counters; incomplete or shared checkout usage is not presented as an exact task total.
