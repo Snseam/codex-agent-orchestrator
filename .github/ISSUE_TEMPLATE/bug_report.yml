@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible problem with Codex Agent Orchestrator.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Codex Agent Orchestrator. Do not include API keys, tokens, private repository contents, or other credentials.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the bug and the impact.
+      placeholder: The coordinator failed when...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest command sequence or scenario that triggers the issue.
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Share versions that matter, such as OS, Node.js, Herdr, Claude Code, Pi, and CAO.
+      placeholder: |
+        OS:
+        Node.js:
+        Herdr:
+        Agent CLI:
+        Codex Agent Orchestrator:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Paste relevant logs after removing secrets, tokens, hostnames, and private paths.
+      render: shell

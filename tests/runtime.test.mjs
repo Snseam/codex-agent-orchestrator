@@ -272,15 +272,6 @@ test('Herdr refuses default sessions for server-affecting operations', async () 
   );
 });
 
-test('Herdr ensureServer treats real nonexistent session snapshot as server_not_running', async () => {
-  const session = `cao-probe-${randomUUID().slice(0, 8)}`;
-  const herdr = new Herdr();
-  await assert.rejects(
-    herdr.snapshot(session),
-    (error) => error instanceof OrchestratorError && error.code === 'server_not_running',
-  );
-});
-
 test('Herdr ensureServer rejects async spawn ENOENT without unhandled errors', async () => {
   const herdr = new Herdr({
     binary: `cao-missing-${randomUUID()}`,

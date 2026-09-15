@@ -1,156 +1,190 @@
 # Codex Agent Orchestrator
 
-Codex Agent Orchestrator（CAO）是一个零依赖 Node 22 CLI，用 Herdr 启动和管理外部 coding agent，在隔离 worktree 中派发任务、收集结果、独立验收、重试并集成补丁。
+**AI coding agent orchestration with Herdr, Git worktrees, and independent verification.**
 
-CAO 不是 daemon，也不是模型供应商。每一步都由 CLI 显式驱动：`dispatch → collect → verify → retry → integrate`。它保留各 agent 自己的 provider、模型、登录态和本地配置；`agentArgs` 只按任务声明透传给对应 agent。
+[![CI](https://github.com/Snseam/codex-agent-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Snseam/codex-agent-orchestrator/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-当前实现重点是 Claude/Herdr 的真实运行路径。已有一次真实控制链路完成：首个会话按测试要求保留错误实现、独立验收失败后，由第二个会话修复，随后 `verify` 和 `integrate` 通过。该过程包含人工处理新 fixture trust，以及一次长粘贴只落在输入框、由 controller 补 Enter 的干预；新版短 prompt 路径也已完成正常冒烟：确认测试目录 trust 后，任务派发、修复、验收、集成和清理均通过，任务派发后没有补输入。两次实验不构成大规模完成率或速度提升的证据。Pi、OpenCode、Codex 目前只有 Herdr 启动适配与提示契约，尚未做端到端验证。
+**English** · [简体中文](README.zh-CN.md)
 
-## 要求
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Agent support](#agent-support) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
 
-- Node.js 22+
-- Git，目标仓库至少有一个 commit
-- Herdr CLI
-- 至少一个 Herdr 支持的交互式 coding agent：`claude`、`pi`、`opencode` 或 `codex`
+Codex Agent Orchestrator (**CAO**) is a local, zero-dependency Node.js CLI for coordinating coding agents through [Herdr](https://github.com/herdrdev/herdr). Let Codex App plan the work, assign scoped tasks to Claude Code or other agent sessions, and verify their changes before integrating them into your project.
 
-本仓没有 npm 运行依赖。可以直接用 `node bin/cao.mjs ...`。
+> **Early preview.** The Claude Code workflow has passed local end-to-end tests, including controlled failure and repair. Other adapters are implemented but not yet verified end to end. Large-scale speed and completion-rate gains have not been measured.
 
-## 快速开始
+## Why CAO?
 
-先确认 CLI 和环境：
+- **Coordinate existing agents.** Use Herdr-managed sessions while preserving each CLI's provider and model configuration.
+- **Isolate parallel work.** Assign independent tasks separate Git worktrees, declared file ownership, dependencies, and run capacity.
+- **Verify actual changes.** Check result identity and file scope, stop the worker, then run your acceptance commands against its candidate.
+- **Repair with evidence.** Start a new attempt with failed check output and the previous worktree's changes intact.
+- **Integrate with checks.** Detect changed target files, apply the verified patch, and rerun acceptance commands in the project checkout.
+- **Keep work inspectable.** Save tasks, prompts, results, terminal output, patches, and verification logs locally.
+
+## How it works
+
+```mermaid
+flowchart TD
+    C[Codex App or CLI caller] --> O[CAO: tasks, attempts, dependencies]
+    O --> H[Herdr: named sessions and terminals]
+    H --> A[Claude Code / Pi / OpenCode / Codex CLI]
+    A --> W[Isolated Git worktree]
+    W --> V[Independent verification]
+    V -->|Failed checks and feedback| O
+    V -->|Accepted candidate| I[Apply patch and verify project]
+```
+
+Codex decides what to build and how to divide the work. CAO manages the task lifecycle; Herdr runs the interactive terminals. The selected coding agent uses the tools available in its own installation.
+
+```text
+dispatch → collect → verify → integrate
+                       ↓
+                     retry → collect → verify
+```
+
+Each stage is an explicit CLI command. Task submission is not completion: `collect` requires an attempt-specific result, and `verify` runs checks independently of the agent's claims.
+
+## Quick start
+
+### 1. Prerequisites
+
+- **Node.js 22+** and **Git**.
+- [Herdr](https://github.com/herdrdev/herdr) installed and available on `PATH`.
+- A supported coding agent CLI, already configured with its provider and credentials.
+- A target Git repository with at least one commit.
+
+Live agent workflows have been tested on macOS. CI checks the offline suite on macOS and Linux; that does not establish live Herdr compatibility on every platform.
+
+### 2. Run from source
 
 ```bash
-cd /Users/yyl-macbookpro/Program/codex-agent-orchestrator
-node bin/cao.mjs --help
+git clone https://github.com/Snseam/codex-agent-orchestrator.git
+cd codex-agent-orchestrator
 node bin/cao.mjs doctor
 ```
 
-初始化一个 run。状态目录必须在目标项目外部；默认是 `~/.local/state/codex-agent-orchestrator`，也可以用 `--state-dir` 指定。
+No `npm install` is needed. There is currently no published npm package.
+
+Try a self-contained workflow with your configured Claude Code:
 
 ```bash
-node bin/cao.mjs init \
-  --project /path/to/target-repo \
-  --id demo-run \
-  --max-parallel 2
+npm run smoke -- --live --happy
 ```
 
-创建任务 JSON，例如 `task.fix-math.json`：
+This creates a disposable Git project, fixes a small function in a worktree, verifies and integrates the change, then stops its Herdr session. A new directory may need a trust confirmation. If it pauses, inspect the saved run before supplying input; see [task states and recovery](docs/states.md).
+
+### 3. Assign work in your project
+
+Replace the example path with your target repository:
+
+```bash
+node bin/cao.mjs init --project /path/to/your-repo --id demo --max-parallel 2
+mkdir -p work
+```
+
+Save the following as `work/task.json` in the CAO checkout. This example assumes your target has `src/math.mjs` and `tests/math.test.mjs`; adapt the objective, allowed paths, and checks to your project.
 
 ```json
 {
-  "id": "fix-math",
-  "objective": "修复 src/math.mjs 中 add(a,b) 的实现，并保持现有 API 不变。",
+  "id": "fix-add",
+  "objective": "Fix add(a, b) to return the sum. Preserve the existing API and tests.",
   "agent": "claude",
-  "role": "implementer",
-  "allowedPaths": ["src/math.mjs", "tests/math.test.mjs"],
+  "allowedPaths": ["src/math.mjs"],
   "checks": [
     {
-      "name": "node tests",
+      "name": "math tests",
       "argv": ["node", "--test", "tests/math.test.mjs"],
       "timeoutMs": 60000
     }
   ],
   "isolation": "worktree",
-  "agentArgs": [],
-  "nativeInstructions": "优先做最小修改；不要提交、不要推送。",
-  "maxChildren": 0,
   "maxAttempts": 3,
-  "dependsOn": []
+  "maxChildren": 0
 }
 ```
 
-先校验任务格式：
+Validate and dispatch:
 
 ```bash
-node bin/cao.mjs validate --file task.fix-math.json
+node bin/cao.mjs validate --file work/task.json
+node bin/cao.mjs dispatch --run demo --file work/task.json
+node bin/cao.mjs collect --run demo --task fix-add --wait-ms 30000
 ```
 
-派发任务。`dispatch` 只提交一次；如果提交后 CLI 超时，后续用 `collect` 或 `resume` 对账，不会自动重复发送同一个 prompt。CAO 会把完整任务写到 attempt 目录的 `prompt.txt`，真正注入 worker 的是一个短入口，要求 agent 读取该文件后执行。
+Check the returned state before advancing. Repeat `collect` while running; use `inspect --output` when input is needed. At `submitted`, run independent verification:
 
 ```bash
-node bin/cao.mjs dispatch --run demo-run --file task.fix-math.json
-node bin/cao.mjs status --run demo-run
-node bin/cao.mjs inspect --run demo-run --task fix-math --output
+node bin/cao.mjs verify --run demo --task fix-add
 ```
 
-收集 agent 结果。agent 必须最后写入 CAO 提供的 `result.json`，并打印 `CAO_RESULT <attemptId>`；CAO 会检查 nonce、changedFiles、children、unresolved 与允许路径。
+If the result is `rework`, start a repair attempt, then collect and verify it again:
 
 ```bash
-node bin/cao.mjs collect --run demo-run --task fix-math --wait-ms 45000
+node bin/cao.mjs retry --run demo --task fix-add
 ```
 
-独立验收。`verify` 会关闭 worker pane，然后在候选 worktree 运行任务里的 `checks`。通过后才生成候选 patch。
+At `accepted`, integrate the candidate. Close the run after all tasks finish or are cancelled:
 
 ```bash
-node bin/cao.mjs verify --run demo-run --task fix-math
+node bin/cao.mjs integrate --run demo --task fix-add
+node bin/cao.mjs cleanup --run demo
 ```
 
-如果验收失败，给出反馈重试。重试沿用同一个候选 worktree 和已有改动，创建新的 attempt、nonce 和 prompt。
+Commands return JSON, with errors on stderr; `--help` prints usage. State lives outside the target project, by default under `~/.local/state/codex-agent-orchestrator` or `$XDG_STATE_HOME/codex-agent-orchestrator`. Use the same `--state-dir` across commands and runs that coordinate one project.
+
+## Agent support
+
+| Agent | Task value | Current validation |
+| --- | --- | --- |
+| Claude Code | `claude` | Local live workflow and controlled repair verified |
+| Pi | `pi` | Launch adapter implemented; live workflow not yet verified |
+| OpenCode | `opencode` | Launch adapter implemented; live workflow not yet verified |
+| Codex CLI | `codex` | Launch adapter implemented; live workflow not yet verified |
+
+`agentArgs` forwards CLI-specific options. `nativeInstructions` describes how a worker should use its available native tools. `maxChildren` is a reporting contract, not a measured or enforced count of running subagents. See the [adapter architecture](docs/architecture.md).
+
+## Verification and boundaries
+
+- CAO is explicitly driven by its caller; it has no background scheduler, MCP server, or native subagent telemetry.
+- Worktrees and `allowedPaths` are coordination controls, not a filesystem sandbox. Ignored untracked files and external side effects are outside the Git snapshot.
+- Failed integration can leave edits in the project. CAO blocks new work for that project until recovery succeeds; `recover` rechecks the current checkout without applying the patch again.
+- Direct `checkout` tasks can retain unverified edits too. Retry that task or recover after its worker stops. Shared project locks require one state directory.
+- Interrupted verification fails closed and needs process/evidence inspection. `resume` does not blindly resend work or replay checks.
+- CAO does not automatically commit, push, publish, install dependencies, or change model providers.
+
+Initial validation included **67 local tests** and **two live Claude Code scenarios**. The suite is now separated into offline tests and an explicit Herdr integration test. One early run needed an extra Enter for a long pasted prompt; task-file dispatch passed a subsequent normal run without input after task submission. New-directory trust was handled in both scenarios. These are functional checks, not performance benchmarks.
+
+## Development
 
 ```bash
-printf '测试仍失败，请根据 check-*.json 修复。\n' > feedback.txt
-node bin/cao.mjs retry --run demo-run --task fix-math --feedback-file feedback.txt
-node bin/cao.mjs collect --run demo-run --task fix-math --wait-ms 45000
-node bin/cao.mjs verify --run demo-run --task fix-math
+npm test                         # Offline tests; no agent credentials needed
+npm run check                    # Syntax checks
+npm run test:herdr                # Requires Herdr; does not start an agent
+npm run smoke -- --live           # Controlled failure → repair → integration
 ```
 
-集成到目标项目。`integrate` 只对 `worktree` 任务可用：它验证候选 patch 未变、目标文件未被别人改动，然后应用 patch 并在目标项目重新运行 checks。CAO 不会自动 commit 或 push。若 apply 后复验失败，改动会保留在当前 checkout，项目进入 integration hold；修好后用 `recover` 复验当前 checkout，不会再次 apply patch。
+Plain `npm run smoke` only prints instructions. Live smoke tests use your configured agent and may incur provider charges. Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing runtime or recovery behavior.
 
-```bash
-node bin/cao.mjs integrate --run demo-run --task fix-math
-```
+## Documentation
 
-清理只停止 CAO 为该 run 启动的 Herdr session 并关闭该 run 的新 dispatch；worktree、状态记录和证据会保留。`cleanup` 不清除 checkout/integration hold。
-
-```bash
-node bin/cao.mjs recover --run demo-run --task fix-math   # 仅在 incomplete integration 或 stopped checkout 需要恢复时使用
-node bin/cao.mjs cleanup --run demo-run
-```
-
-## 命令速查
-
-| 命令 | 作用 |
+| Resource | Contents |
 | --- | --- |
-| `init --project PATH [--id ID] [--max-parallel N]` | 创建 run，记录项目基线和 CAO 专用 Herdr session。 |
-| `validate --file TASK.json` | 校验任务 JSON。 |
-| `dispatch --run ID --file TASK.json` | 预留 attempt、准备 worktree/checkout、启动 agent 并发送 prompt。 |
-| `status [--run ID]` | 查看 run 列表或某个 run 的任务/attempt 状态。 |
-| `inspect --run ID --task ID [--output]` | 查看单个任务；`--output` 会读取 worker 可见输出。 |
-| `collect --run ID --task ID [--wait-ms N]` | 等待并收集 result JSON，不重新提交。 |
-| `verify --run ID --task ID` | 停止 worker，运行 checks，生成 verification。 |
-| `retry --run ID --task ID [--feedback-file PATH]` | 在失败/中断/取消后创建下一次 attempt。 |
-| `resume --run ID --task ID` | 对账中断状态；未提交则尝试发送，已提交则 collect。 |
-| `input --run ID --task ID (--keys enter | --text-file PATH)` | 给仍可交互的 worker 发送人工输入。 |
-| `integrate --run ID --task ID` | 把已验收 worktree patch 应用到目标项目并复验。 |
-| `recover --run ID --task ID` | 复验当前 checkout：用于 incomplete integration 或已停止的 checkout 任务，不重放 worker、不重复 apply patch。 |
-| `cancel --run ID --task ID` | 请求取消并关闭 worker pane；checkout 无改动时可释放 checkout hold。 |
-| `cleanup --run ID` | 停止 CAO session、关闭 run 新派发，保留证据，不清除 hold。 |
-| `doctor` | 查看本机工具和 agent 可用性。 |
+| [Architecture](docs/architecture.md) | CLI, state store, Herdr runtime, Git isolation, verification |
+| [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
+| [Codex skill draft](skills/herdr-dev/SKILL.md) | Guidance for driving CAO from Codex; not installed automatically |
+| [Changelog](CHANGELOG.md) | Release history |
+| [中文文档](README.zh-CN.md) | Chinese overview and getting started |
 
-所有命令输出 JSON；错误也以 JSON 写到 stderr。
+## Contributing and support
 
-## 任务字段
+Bug reports, documentation fixes, and focused pull requests are welcome. Read the [contribution guidelines](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md), then [open an issue](https://github.com/Snseam/codex-agent-orchestrator/issues/new/choose).
 
-`id`、`objective`、`allowedPaths`、`checks` 是必填。`agent` 可选值是 `claude`、`pi`、`opencode`、`codex`，默认 `claude`。`isolation` 可选 `worktree` 或 `checkout`，默认 `worktree`。路径必须是规范化相对路径或以 `/` 结尾的目录前缀；不支持 glob、绝对路径、反斜杠、路径穿越和 `.git`。
+For security vulnerabilities, follow [SECURITY.md](SECURITY.md) and use private reporting instead of public issues.
 
-`allowedPaths` 是验收范围，不是安全沙箱。agent 进程仍按本机权限运行；CAO 在 `collect` 时拒绝未被允许的 tracked/unignored 变更。未追踪且被 Git 忽略的文件不会进入快照或候选 patch，因此集成时不会覆盖目标项目中的 gitignored 文件。
+Maintained by [Snseam](https://github.com/Snseam). CAO is an independent project integrating with existing coding tools.
 
-`maxChildren` 只约束 agent 最终报告中的 `children` 数量。CAO 不监测 Claude/Pi/OpenCode/Codex 的原生 child/subagent 实际生命周期，也没有 MCP/daemon 原生 children telemetry；它不把终端 idle 当作 child 已完成的证明。
+## License
 
-## 更多文档
-
-- [架构与模块](docs/architecture.md)
-- [状态、隔离与集成语义](docs/states.md)
-
-## 开发与验证
-
-```bash
-npm test
-npm run check
-npm run smoke -- --live             # 两次尝试的受控失败/修复实验
-npm run smoke -- --live --happy     # 单次正常修复实验
-```
-
-不带 `--live` 的 smoke 只显示说明，不启动模型。遇到终端输入需求时脚本保存 run 和 journal；用 `inspect --output` 检查并处理后，按输出路径执行 `npm run smoke -- --live --resume /absolute/path/to/smoke.json`。真实冒烟在独立测试仓库内执行，保留日志和工作副本；第一次访问目录可能需要确认信任。首版实测环境是 macOS，尚未验证其他操作系统。
-
-仓库内技能草案：[skills/herdr-dev/SKILL.md](skills/herdr-dev/SKILL.md)。当前没有安装到全局。
+[Apache License 2.0](LICENSE). Copyright 2026 Snseam. See [NOTICE](NOTICE).

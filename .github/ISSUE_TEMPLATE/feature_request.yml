@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest an improvement or new capability.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please avoid sharing credentials, private repository contents, or sensitive operational details.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What workflow are you trying to improve?
+      placeholder: I want Codex Agent Orchestrator to...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, CLI surface, or integration you would like.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Orchestration
+        - Agent adapter
+        - Herdr integration
+        - Verification
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional context about other approaches or workarounds.

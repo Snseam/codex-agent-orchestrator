@@ -2,13 +2,38 @@
   "name": "codex-agent-orchestrator",
   "version": "0.1.0",
   "private": true,
-  "description": "Codex-led task orchestration over Herdr with isolated work and verifiable results",
+  "description": "CLI for Codex-led AI coding agent orchestration via Herdr, with Git worktree isolation and independent verification.",
   "type": "module",
-  "engines": { "node": ">=22" },
-  "bin": { "cao": "bin/cao.mjs" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "cao": "bin/cao.mjs"
+  },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs",
-    "smoke": "node scripts/smoke.mjs"
-  }
+    "smoke": "node scripts/smoke.mjs",
+    "test:herdr": "node --test tests/integration/*.test.mjs"
+  },
+  "license": "Apache-2.0",
+  "author": "Snseam",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Snseam/codex-agent-orchestrator.git"
+  },
+  "homepage": "https://github.com/Snseam/codex-agent-orchestrator#readme",
+  "bugs": {
+    "url": "https://github.com/Snseam/codex-agent-orchestrator/issues"
+  },
+  "keywords": [
+    "coding-agent",
+    "multi-agent",
+    "orchestration",
+    "codex",
+    "claude-code",
+    "herdr",
+    "git-worktree",
+    "verification"
+  ]
 }
