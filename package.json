@@ -2,7 +2,7 @@
   "name": "codex-agent-orchestrator",
   "version": "0.1.0",
   "private": true,
-  "description": "CLI for Codex-led AI coding agent orchestration via Herdr, with Git worktree isolation and independent verification.",
+  "description": "Codex-led coding agent orchestration and local status monitoring via Herdr, with Git worktree isolation and independent verification.",
   "type": "module",
   "engines": {
     "node": ">=22.13"
@@ -36,6 +36,8 @@
     "claude-code",
     "herdr",
     "git-worktree",
-    "verification"
+    "verification",
+    "agent-monitor",
+    "agent-dashboard"
   ]
 }

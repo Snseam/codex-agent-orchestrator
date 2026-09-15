@@ -15,6 +15,16 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 - Profiled local gateway relay with same-protocol fallbacks, model rewriting, source drift checks, and private per-attempt native configuration for Claude Code, Codex CLI, Pi, and OpenCode.
 - Bilingual execution-profile documentation and architecture notes covering routing, CC Switch schema-18 limits, secrets, gateway behavior, and current validation evidence.
 - Profiled execution smoke evidence covers Herdr 0.9+ with two Claude sessions against a local simulated Anthropic API: separate models/keys, Read/Write/Bash/tool-result submission, two independently accepted tasks, 16 matched gateway requests, unchanged global provider files, and runtime release. This is not a real model-quality or provider-billing measurement.
+- Local Agent Monitor commands (`monitor start/status/stop/snapshot`) for read-only localhost metadata dashboards over CAO projects, individual runs, or explicit machine-wide scope.
+- Monitor source adapters for CAO state, Codex app-server/SQLite metadata, and Claude hook/local metadata, with source freshness labels and no storage of prompts, tool inputs, tool outputs, or replies.
+- CAO-managed Claude hook telemetry for sanitized child lifecycle metadata, with graceful degradation for disabled hooks, bare launches, unsafe settings, or unmanaged sessions.
+- Monitor validation evidence covers a CAO-managed Claude Explore child reporting `SubagentStart -> running -> SubagentStop -> completed`; independent acceptance and integration passed, and generated settings were removed after worker shutdown while existing event evidence remained. Browser checks cover desktop/mobile layouts, conversation isolation and retained selection, unlinked-only snapshots, token details, known zero, missing usage, and partial records.
+- Agent Monitor Project and Conversation views, including explicit conversation-root graph relationships for Codex subagents, CAO external agents, and Claude children without project-path parent guessing.
+- Per-agent token metadata in monitor snapshots (`nodes.tokens` / `tokenUsage`) with session/turn/observed scope, source, completeness, and partial/scanned-window handling. These observations are not provider billing, subscription balance, or exact CAO task cost.
+
+### Fixed
+
+- Preserve command cancellation escalation after a leader exits, so TERM-resistant descendants are killed before cancellation settles.
 
 ## [0.1.0] - 2026-09-15
 

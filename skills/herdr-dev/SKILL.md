@@ -17,7 +17,11 @@ Select the user's configured agent; actual availability must be checked locally.
 
 Route scores and quota records are declared inputs with freshness rules, not measured model superiority or guaranteed subscription balance. Set shared `account.id` values for profiles using the same account; CAO reserves attempt capacity, not every native child or API request. Explicit shared-proxy use needs `allowShared`; check source drift rather than silently refreshing a running attempt. Each attempt pins its configuration; changing a profile applies to a new attempt, and retry may select another agent. Send secret values only through stdin/private credential references, never prompt text or CLI arguments.
 
-`nativeInstructions` can request the selected agent's available internal tools; set `maxChildren` to the intended number and avoid duplicating externally owned tasks inside the worker. Native children are self-reported, not monitored or capped by CAO. Do not promise native teams or large-scale concurrency from this MVP alone.
+`nativeInstructions` can request the selected agent's available internal tools; set `maxChildren` to the intended number and avoid duplicating externally owned tasks inside the worker. Child reports remain part of the delivery contract. The monitor can also observe supported native lifecycle metadata, but it does not enforce native concurrency or replace independent acceptance. Do not promise native teams or large-scale concurrency from this MVP alone.
+
+When the user asks to see agent activity, use `monitor start --project ABS_PATH --open` with the same state directory as the project's runs; report its local URL. See [monitoring](../../docs/monitor.md) for scope and source coverage. Keep the default project scope unless the user asks for `--all`. The CLI captures the calling Codex thread ID when available; use `--coordinator ID` only for a known, explicitly associated thread. Treat observed, stale and unknown states as such, especially when Codex live status is unavailable. The page is read-only, and `monitor stop` stops only the viewer process, never workers. Never expose prompts, terminal output or provider credentials to populate the page.
+
+Use the page's Conversation view to focus on the monitor-associated Codex conversation and its linked agents. This association does not follow App window focus. Token cells show native usage when available; inspect their scope and completeness before interpreting them, and never equate session totals with exact task cost.
 
 ## Drive the actual CLI loop
 

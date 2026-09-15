@@ -1,0 +1,56 @@
+.cao-conv {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cao-conv__switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cao-conv__tab {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.cao-conv__tab[aria-pressed="true"] {
+  background: var(--select);
+  border-color: var(--focus);
+}
+
+.cao-conv__controls {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cao-conv__field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.cao-conv__label {
+  color: var(--muted);
+}
+
+.cao-conv__select {
+  min-width: 0;
+}
+
+.cao-conv__note {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .cao-conv__tab {
+    flex-basis: 100%;
+  }
+}

@@ -1,0 +1,86 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { publicSnapshot } from '../src/monitor/model.mjs';
+
+const now = Date.parse('2026-01-01T00:00:00.000Z');
+
+test('publicSnapshot exposes only browser contract fields and strips sensitive text fields', () => {
+  const snapshot = publicSnapshot({
+    scope: { project: '/project', runId: 'run1' },
+    projects: [{ id: '/project', label: 'Project\u0007Name', path: '/project', secret: 'PROJECT_SECRET' }],
+    sources: [{ id: 'cao', status: 'connected', label: 'CAO', detail: 'ok', secret: 'SOURCE_SECRET' }],
+    nodes: [{
+      id: 'node1', parentId: null, agent: 'codex', kind: 'agent', label: 'Worker\u001b[31m', role: 'implementer', model: 'gpt',
+      projectId: '/project', runId: 'run1', taskId: 'task1', attemptId: 'attempt1', nativeSessionId: 'session1',
+      status: 'running', statusLabel: 'Running', delivery: 'submitted', startedAt: now, updatedAt: now, finishedAt: null,
+      observedAt: now, stale: false, source: 'cao', confidence: 'live', relation: 'cao', tokens: 7,
+      prompt: 'PROMPT_SECRET', objective: 'OBJECTIVE_SECRET', messages: ['MESSAGE_SECRET'], toolOutput: 'TOOL_SECRET', secret: 'NODE_SECRET',
+    }],
+  }, now);
+
+  assert.deepEqual(Object.keys(snapshot.nodes[0]).sort(), [
+    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'observedAt',
+    'parentId', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
+  ].sort());
+  const serialized = JSON.stringify(snapshot);
+  assert.doesNotMatch(serialized, /PROMPT_SECRET|OBJECTIVE_SECRET|MESSAGE_SECRET|TOOL_SECRET|NODE_SECRET|PROJECT_SECRET|SOURCE_SECRET/);
+  assert.equal(snapshot.nodes[0].label, 'Worker [31m');
+  assert.doesNotMatch(snapshot.nodes[0].label, /[\x00-\x1f]/);
+});
+
+test('publicSnapshot falls back invalid enum and scalar values to safe public values', () => {
+  const snapshot = publicSnapshot({
+    scope: { all: true, project: null, runId: null }, projects: [], sources: [{ id: 'weird', status: 'bogus', label: null, detail: null }],
+    nodes: [{ id: 'n', agent: 'made-up', kind: 'bad-kind', status: 'done-ish', delivery: 'raw-output', source: 'filesystem', confidence: 'certain', relation: 'magic', tokens: -1 }],
+  }, now);
+
+  assert.equal(snapshot.scope.mode, 'all');
+  assert.equal(snapshot.nodes[0].agent, 'unknown');
+  assert.equal(snapshot.nodes[0].kind, 'agent');
+  assert.equal(snapshot.nodes[0].status, 'unknown');
+  assert.equal(snapshot.nodes[0].delivery, null);
+  assert.equal(snapshot.nodes[0].source, 'cao');
+  assert.equal(snapshot.nodes[0].confidence, 'unknown');
+  assert.equal(snapshot.nodes[0].relation, 'unlinked');
+  assert.equal(snapshot.nodes[0].tokens, null);
+  assert.equal(snapshot.sources[0].status, 'unavailable');
+});
+
+test('publicSnapshot breaks cyclic parents and enforces node limit without hanging', () => {
+  const nodes = [
+    { id: 'a', parentId: 'b', relation: 'native' },
+    { id: 'b', parentId: 'a', relation: 'native' },
+  ];
+  for (let i = 0; i < 1005; i++) nodes.push({ id: `extra-${i}`, status: 'running' });
+  const snapshot = publicSnapshot({ scope: {}, projects: [], sources: [], nodes }, now);
+
+  assert.equal(snapshot.nodes.length, 1000);
+  assert.equal(snapshot.truncated, true);
+  const a = snapshot.nodes.find(node => node.id === 'a');
+  const b = snapshot.nodes.find(node => node.id === 'b');
+  assert.ok(!a.parentId || !b.parentId || a.parentId !== 'b' || b.parentId !== 'a');
+  assert.ok([a, b].some(node => node.relation === 'unlinked' && node.parentId === null));
+});
+
+test('token metadata keeps an authoritative total without summing detail counters or leaking payload fields', () => {
+  const snapshot = publicSnapshot({ nodes: [{ id: 'usage', tokens: 999, tokenUsage: { total: 100, input: 80, output: 20, cacheRead: 40, reasoning: 10, scope: 'session', source: 'local', complete: true, prompt: 'TOKEN_PRIVATE_CANARY' } }], projects: [], sources: [], scope: { all: true } });
+  assert.equal(snapshot.nodes[0].tokens, 100);
+  assert.equal(snapshot.nodes[0].tokenUsage.total, 100);
+  assert.equal(snapshot.nodes[0].tokenUsage.cacheRead, 40);
+  assert.equal(JSON.stringify(snapshot).includes('TOKEN_PRIVATE_CANARY'), false);
+  const empty = publicSnapshot({ nodes: [{ id: 'missing' }, { id: 'zero', tokenUsage: { total: 0, complete: true } }], projects: [], sources: [], scope: {} });
+  assert.equal(empty.nodes[0].tokens, null);
+  assert.equal(empty.nodes[0].tokenUsage, null);
+  assert.equal(empty.nodes[1].tokens, 0);
+});
+
+test('re-sanitizing snapshots cannot turn ambiguous or cyclic conversation ancestry into a confirmed group', () => {
+  const root = { id: 'codex:root', nativeSessionId: 'root', agent: 'codex', kind: 'coordinator', relation: 'native' };
+  for (const nodes of [[root, { ...root }], [{ ...root, parentId: 'codex:other' }, { ...root, id: 'codex:other', nativeSessionId: 'other', parentId: 'codex:root' }]]) {
+    const first = publicSnapshot({ nodes, projects: [], sources: [], scope: {} });
+    const second = publicSnapshot({ ...first, scope: {} });
+    assert.deepEqual(first.conversations, []);
+    assert.deepEqual(second.conversations, []);
+    assert.ok(second.nodes.every(n => n.conversationId === null));
+  }
+});

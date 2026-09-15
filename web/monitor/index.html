@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>CAO · Agent Monitor</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f3eee4'/%3E%3Crect x='6' y='8' width='20' height='3' rx='1.5' fill='%231c2429'/%3E%3Crect x='10' y='14.5' width='16' height='3' rx='1.5' fill='%234a5560'/%3E%3Crect x='10' y='21' width='12' height='3' rx='1.5' fill='%234a5560'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./conversations.css" />
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#activity" data-i18n="skip">Skip to activity</a>
+    <div id="app">
+      <header class="top">
+        <div class="top-title">
+          <h1 data-i18n="appName">CAO · Agent Monitor</h1>
+          <p class="scope-line" id="scope-line"></p>
+        </div>
+        <div class="top-actions">
+          <p class="connection" id="connection" data-state="loading">
+            <span class="connection-dot" aria-hidden="true"></span>
+            <span id="connection-text" data-i18n="loading">Loading</span>
+          </p>
+          <p class="observed" id="observed"></p>
+          <button type="button" id="refresh" data-i18n="refresh">
+            Refresh
+          </button>
+          <div class="lang" role="group" aria-labelledby="lang-label">
+            <span id="lang-label" class="visually-hidden" data-i18n="language"
+              >Language</span
+            >
+            <button type="button" id="lang-en" aria-pressed="true">EN</button>
+            <button type="button" id="lang-zh" aria-pressed="false">
+              中文
+            </button>
+          </div>
+        </div>
+      </header>
+      <div class="layout" id="layout">
+        <aside class="sidebar" id="sidebar" aria-labelledby="filters-heading">
+          <button
+            type="button"
+            id="filters-toggle"
+            class="filters-toggle"
+            aria-controls="sidebar-body"
+            aria-expanded="false"
+            hidden
+            data-i18n-aria="showFilters"
+          >
+            <span data-i18n="filters">Filters</span>
+          </button>
+          <div id="sidebar-body" class="sidebar-body">
+            <h2
+              id="filters-heading"
+              class="sidebar-heading"
+              data-i18n="filters"
+            >
+              Filters
+            </h2>
+            <label class="field">
+              <span data-i18n="search">Search</span>
+              <input
+                id="filter-search"
+                type="search"
+                autocomplete="off"
+                data-i18n-placeholder="searchPlaceholder"
+                placeholder="Label, id, task"
+              />
+            </label>
+            <label class="field">
+              <span data-i18n="project">Project</span>
+              <select id="filter-project">
+                <option value="" data-i18n="allInScope">
+                  All in this scope
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="status">Status</span>
+              <select id="filter-status">
+                <option value="" data-i18n="allStatuses">All statuses</option>
+                <option value="running" data-i18n="statusRunning">
+                  Running
+                </option>
+                <option value="waiting" data-i18n="statusWaiting">
+                  Waiting
+                </option>
+                <option value="idle" data-i18n="statusIdle">Idle</option>
+                <option value="completed" data-i18n="statusCompleted">
+                  Finished turn
+                </option>
+                <option value="failed" data-i18n="statusFailed">Failed</option>
+                <option value="cancelled" data-i18n="statusCancelled">
+                  Cancelled
+                </option>
+                <option value="unknown" data-i18n="statusUnknown">
+                  Unknown
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="software">Software</span>
+              <select id="filter-agent">
+                <option value="" data-i18n="allSoftware">All software</option>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+                <option value="pi">Pi</option>
+                <option value="opencode">OpenCode</option>
+                <option value="unknown" data-i18n="statusUnknown">
+                  Unknown
+                </option>
+              </select>
+            </label>
+            <section class="sources" aria-labelledby="sources-heading">
+              <h2
+                id="sources-heading"
+                class="sidebar-heading"
+                data-i18n="sources"
+              >
+                Sources
+              </h2>
+              <ul id="source-list" class="source-list"></ul>
+            </section>
+          </div>
+        </aside>
+        <main class="main">
+          <div id="conversation-view"></div>
+          <section class="counts" id="counts" aria-labelledby="counts-heading">
+            <h2 id="counts-heading" class="visually-hidden" data-i18n="counts">
+              Status counts
+            </h2>
+            <ul class="count-list">
+              <li class="count-card" data-count="active">
+                <span class="count-value" id="count-active">—</span
+                ><span class="count-label" data-i18n="countActive">Active</span>
+              </li>
+              <li class="count-card" data-count="waiting">
+                <span class="count-value" id="count-waiting">—</span
+                ><span class="count-label" data-i18n="countWaiting"
+                  >Waiting</span
+                >
+              </li>
+              <li class="count-card" data-count="finished">
+                <span class="count-value" id="count-finished">—</span
+                ><span class="count-label" data-i18n="countFinished"
+                  >Finished</span
+                >
+              </li>
+              <li class="count-card" data-count="unknown">
+                <span class="count-value" id="count-unknown">—</span
+                ><span class="count-label" data-i18n="countUnknown"
+                  >Unknown</span
+                >
+              </li>
+            </ul>
+          </section>
+          <div id="banner" class="banner" hidden></div>
+          <section
+            class="activity"
+            id="activity"
+            aria-labelledby="activity-heading"
+          >
+            <h2 id="activity-heading" data-i18n="activity">Agent activity</h2>
+            <p id="loading" class="notice" data-i18n="loadingDetail">
+              Loading observed agents. No placeholder rows are shown.
+            </p>
+            <p id="empty" class="notice" hidden></p>
+            <div id="table-wrap" class="table-wrap" hidden>
+              <table id="table" hidden>
+                <caption class="visually-hidden" data-i18n="activityCaption">
+                  Hierarchical agent status
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col" data-i18n="colAgent">Agent</th>
+                    <th scope="col" class="col-status" data-i18n="colStatus">
+                      Status
+                    </th>
+                    <th scope="col" class="col-tokens" data-i18n="colTokens">
+                      Tokens
+                    </th>
+                    <th
+                      scope="col"
+                      class="col-secondary"
+                      data-i18n="colDelivery"
+                    >
+                      Delivery
+                    </th>
+                    <th
+                      scope="col"
+                      class="col-secondary"
+                      data-i18n="colUpdated"
+                    >
+                      Updated
+                    </th>
+                    <th scope="col" class="col-secondary" data-i18n="colSource">
+                      Source
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="tbody"></tbody>
+              </table>
+            </div>
+            <nav id="pager" class="pager" hidden aria-label="Pagination"></nav>
+          </section>
+        </main>
+        <aside
+          class="detail"
+          id="detail"
+          hidden
+          aria-labelledby="detail-heading"
+        >
+          <div class="detail-bar">
+            <h2 id="detail-heading" data-i18n="details">Details</h2>
+            <button
+              type="button"
+              id="detail-close"
+              data-i18n-aria="closeDetails"
+              aria-label="Close details"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+          <div id="detail-body"></div>
+        </aside>
+      </div>
+    </div>
+    <p
+      id="live"
+      class="visually-hidden"
+      aria-live="polite"
+      aria-atomic="true"
+    ></p>
+  </body>
+</html>
