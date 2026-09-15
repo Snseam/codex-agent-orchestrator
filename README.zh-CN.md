@@ -3,20 +3,21 @@
 **基于 Herdr、Git worktree 和独立验收的 AI 编程 Agent 协调工具。**
 
 [![CI](https://github.com/Snseam/codex-agent-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Snseam/codex-agent-orchestrator/actions/workflows/ci.yml)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 [English](README.md) · **简体中文**
 
-[快速开始](#快速开始) · [工作原理](#工作原理) · [Agent 支持](#agent-支持) · [Token 用量](#token-用量) · [文档](#文档) · [参与贡献](CONTRIBUTING.md)
+[快速开始](#快速开始) · [工作原理](#工作原理) · [执行配置](#执行配置) · [Agent 支持](#agent-支持) · [Token 用量](#token-用量) · [文档](#文档) · [参与贡献](CONTRIBUTING.md)
 
-Codex Agent Orchestrator（**CAO**）是本地运行、零运行依赖的 Node.js CLI，通过 [Herdr](https://github.com/herdrdev/herdr) 协调多个编程 Agent。由 Codex App 规划工作，将范围明确的任务分配给 Claude Code 或其他 Agent 会话，独立验收通过后再整合到项目。
+Codex Agent Orchestrator（**CAO**）是本地运行、零运行依赖的 Node.js CLI，通过 [Herdr](https://github.com/herdrdev/herdr) 协调多个编程 Agent。由 Codex App 或 Codex CLI 规划工作，将范围明确的任务分配给 Claude Code 或其他 Agent 会话，独立验收通过后再整合到项目。
 
-> **早期预览。** Claude Code 流程已通过本机端到端测试，包含受控失败与修复。其他启动适配已实现，尚未完成端到端验证。大规模协作的速度及完成率收益尚未测量。
+> **早期预览。** 基础 Claude Code 流程已通过本机端到端测试，包含受控失败与修复。Profiled execution 也已用 Herdr 0.9+ 和两个 Claude session 针对本地 Anthropic 兼容测试服务检查。Codex 和 Pi 的原生 CLI 配置请求已通过本地模拟 API 检查；它们的完整 Herdr 流程和 OpenCode 尚未实测。大规模速度、质量和成本效果尚未测量。
 
 ## 为什么使用 CAO？
 
 - **复用已有 Agent。** 通过 Herdr 管理会话，保留各 CLI 的模型和提供商配置。
+- **选择执行配置。** 将任务路由到 Claude、Codex、Pi 或 OpenCode 原生 profile，并使用本地 relay gateway、stored secret、fallback 和容量预约。
 - **隔离并行工作。** 为独立任务分配 Git worktree，声明修改范围、依赖和运行容量。
 - **验收实际修改。** 校验结果身份与文件范围，停止 worker 后独立执行验收命令。
 - **根据证据修复。** 新尝试接收失败日志，并保留前一次 worktree 中的修改。
@@ -50,7 +51,7 @@ dispatch → collect → verify → integrate
 
 ### 1. 准备环境
 
-- **Node.js 22+** 和 **Git**。
+- **Node.js 22.13+** 和 **Git**。
 - 已安装 [Herdr](https://github.com/herdrdev/herdr)，且可从 `PATH` 调用。
 - 一个已配置提供商和凭证的受支持编程 Agent CLI。
 - 至少包含一个 commit 的目标 Git 仓库。
@@ -134,16 +135,35 @@ node bin/cao.mjs cleanup --run demo
 
 命令默认返回 JSON，错误写入 stderr；`--help` 显示用法。状态保存在目标项目外，默认位于 `~/.local/state/codex-agent-orchestrator` 或 `$XDG_STATE_HOME/codex-agent-orchestrator`。协调同一项目的命令和 run 应使用相同 `--state-dir`。
 
+## 执行配置
+
+Execution profile 是可选能力。它让 CAO 为每个任务选择原生 agent、模型、上游 endpoint、凭证引用和路由策略，同时不改写全局 provider 文件。Profile 可以手写，也可以从只读 CC Switch 数据库导入。stored secret 从 stdin 或环境变量引用读取；secret 值不会写入 profile JSON。
+
+常用命令：
+
+```bash
+node bin/cao.mjs profile put --file profile.json --default
+printf '%s\n' "$ANTHROPIC_API_KEY" | node bin/cao.mjs secret set --id anthropic-main --stdin
+node bin/cao.mjs source discover --directory ~/.cc-switch
+node bin/cao.mjs profile import-cc-switch --provider claude-main --app claude --id claude-main
+node bin/cao.mjs route explain --file work/task.json
+node bin/cao.mjs gateway list
+```
+
+路由支持固定 profile 和 `agent: "auto"` 自动选择。default profile 本身也是 execution selector：旧任务省略 `execution` 时，CAO 可以使用 default profile，包括 `agent: "auto"` 场景。若任务指定具体 agent，default 仍必须与该 agent 兼容。
+
+第一版 CC Switch source adapter 面向 schema version 18，支持来自 `settings_config.env` 的 Claude direct API 记录，以及显式 `--allow-shared` 复用 active Claude proxy。OAuth-only 和非 Claude 记录会列为 unsupported，不会伪装成 direct profile。详见[执行配置与路由](docs/zh-CN/execution-profiles.md)。
+
 ## Agent 支持
 
 | Agent | 任务字段值 | 当前验证情况 |
 | --- | --- | --- |
-| Claude Code | `claude` | 本机真实流程与受控失败修复已验证 |
-| Pi | `pi` | 已实现启动适配；真实流程待验证 |
-| OpenCode | `opencode` | 已实现启动适配；真实流程待验证 |
-| Codex CLI | `codex` | 已实现启动适配；真实流程待验证 |
+| Claude Code | `claude` | 本机真实流程与受控失败修复已验证；profiled 本地 relay 已用模拟 Anthropic API 检查 |
+| Pi | `pi` | 原生 CLI 配置请求已通过模拟 API 验证；完整 Herdr 流程待验证 |
+| OpenCode | `opencode` | 已实现启动与 profiled runtime 适配；真实流程待验证 |
+| Codex CLI | `codex` | 原生 CLI 配置请求已通过模拟 API 验证；完整 Herdr 流程待验证 |
 
-`agentArgs` 透传 CLI 启动参数；`nativeInstructions` 说明如何使用实际可用的原生工具。`maxChildren` 是报告契约，不是对子代理数量的监测或强制限制。详见[适配器架构](docs/zh-CN/architecture.md)。
+继承模式下 `agentArgs` 透传 CLI 启动参数。Profiled task 会拒绝与 profile 管理的模型、provider、session、config 或 worktree 设置冲突的参数；Codex 允许部分 reasoning/verbosity `-c` override。`nativeInstructions` 说明如何使用实际可用的原生工具。`maxChildren` 是报告契约，不是对子代理数量的监测或强制限制。详见[适配器架构](docs/zh-CN/architecture.md)和[执行配置](docs/zh-CN/execution-profiles.md)。
 
 ## Token 用量
 
@@ -165,7 +185,7 @@ node bin/cao.mjs usage --today
 - 验证中断时保留阻塞状态，需要检查进程和证据；`resume` 不盲目重发任务或重跑检查。
 - CAO 不自动 commit、push、发布、安装依赖或切换模型提供商。
 
-初版验证包含 **67 项本地测试**和**两组真实 Claude Code 场景**。测试现已分为离线测试和显式 Herdr 集成测试。一组早期实验中，长提示需要补一次 Enter；改为任务文件后，后续正常流程在派发任务后没有补输入。两组实验均处理了新目录信任。这些是功能验证，不是性能基准。
+验证证据包括离线测试、显式 Herdr 检查、基础 Claude Code 真实场景，以及一次 profiled execution 冒烟：Herdr 0.9+、两个 Claude session、本地模拟 Anthropic API。该冒烟覆盖两个 profile 的模型/key 路由、Read/Write/Bash/提交、独立 accepted、16 个 gateway 请求匹配、全局 provider 文件未变化和 runtime 释放。这是功能集成证据，不代表真实模型质量、provider 计费或生产可靠性。
 
 ## 开发
 
@@ -182,7 +202,8 @@ npm run smoke -- --live           # 受控失败 → 修复 → 集成
 
 | 资料 | 内容 |
 | --- | --- |
-| [架构与模块](docs/zh-CN/architecture.md) | CLI、状态存储、Herdr 适配、Git 隔离与验证 |
+| [架构与模块](docs/zh-CN/architecture.md) | CLI、状态存储、Herdr 适配、Git 隔离、验证与 profiled execution |
+| [执行配置与路由](docs/zh-CN/execution-profiles.md) | Profile CRUD、secret、CC Switch 导入、路由、gateway 生命周期 |
 | [任务状态与恢复](docs/zh-CN/states.md) | 结果契约、重试、交互、checkout 与集成阻塞 |
 | [Token 用量报告](docs/zh-CN/usage.md) | 可选 Tokscale 集成、JSON 形状与归属边界 |
 | [Codex 技能草案](skills/herdr-dev/SKILL.md) | 由 Codex 驱动 CAO 的流程指引，不自动安装 |

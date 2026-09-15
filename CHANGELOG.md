@@ -10,6 +10,11 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 - Agent/model/date filters, JSON or terminal-table output, and CAO run/task workspace attribution with explicit precision and coverage metadata.
 - Separate input, output, cache read/write, and reasoning counters; incomplete or shared checkout usage is not presented as an exact task total.
 - An opt-in synthetic Tokscale integration test and bilingual token-usage documentation.
+- Execution profiles for selecting native Claude, Codex, Pi, and OpenCode runtime settings per task without rewriting global provider files.
+- Profile CRUD/default/export, stored and environment secret references, CC Switch source discovery/import, route explanation, gateway lifecycle commands, and CAO-attempt reservation tracking.
+- Profiled local gateway relay with same-protocol fallbacks, model rewriting, source drift checks, and private per-attempt native configuration for Claude Code, Codex CLI, Pi, and OpenCode.
+- Bilingual execution-profile documentation and architecture notes covering routing, CC Switch schema-18 limits, secrets, gateway behavior, and current validation evidence.
+- Profiled execution smoke evidence covers Herdr 0.9+ with two Claude sessions against a local simulated Anthropic API: separate models/keys, Read/Write/Bash/tool-result submission, two independently accepted tasks, 16 matched gateway requests, unchanged global provider files, and runtime release. This is not a real model-quality or provider-billing measurement.
 
 ## [0.1.0] - 2026-09-15
 

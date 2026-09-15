@@ -73,7 +73,7 @@ function runRecord(id, tasks) {
   };
 }
 
-function taskRecord({ id, agent = 'claude', isolation = 'worktree', cwd, attempts = [cwd] }) {
+function taskRecord({ id, agent = 'claude', isolation = 'worktree', cwd, attempts = [cwd], attemptAgents = [] }) {
   return {
     definition: {
       id,
@@ -97,6 +97,7 @@ function taskRecord({ id, agent = 'claude', isolation = 'worktree', cwd, attempt
       number: index + 1,
       cwd: attemptCwd,
       status: 'accepted',
+      ...(attemptAgents[index] ? { execution: { agent: attemptAgents[index] } } : {}),
     })),
   };
 }
@@ -175,6 +176,74 @@ test('run and task scoped usage matches exact workspace paths and Claude slugs w
   assert.equal(taskReport.rows.length, 1);
   assert.equal(taskReport.rows[0].agent, 'claude');
   assert.equal(taskReport.totals.totalTokens, 15);
+});
+
+test('auto task without a launched execution agent is reported as unavailable instead of invalid', async t => {
+  const root = await stateRoot(t);
+  await createRun(root, runRecord('run-auto-unstarted', [
+    taskRecord({ id: 'auto-pending', agent: 'auto', cwd: null, attempts: [null] }),
+  ]));
+  const tokscale = new FakeTokscale({});
+  const service = new UsageService({ stateRoot: root, tokscale });
+
+  const report = await service.query({ run: 'run-auto-unstarted', home });
+  assert.equal(report.status, 'unattributable');
+  assert.equal(report.rows.length, 0);
+  assert.deepEqual(report.coverage, [{
+    taskId: 'auto-pending',
+    agent: 'auto',
+    status: 'workspace_unavailable',
+    attempts: 1,
+    expectedWorkspaces: 0,
+    matchedWorkspaces: 0,
+  }]);
+  assert.deepEqual(tokscale.calls.filter(call => call.method === 'models'), []);
+
+  const filtered = await service.query({ run: 'run-auto-unstarted', agent: 'codex', home });
+  assert.equal(filtered.status, 'no_matching_tasks');
+  assert.deepEqual(filtered.coverage, []);
+});
+
+test('auto task retry attribution uses each attempt execution agent and keeps same workspace split by agent', async t => {
+  const root = await stateRoot(t);
+  const cwd = '/cao/workspaces/auto-same-cwd';
+  await createRun(root, runRecord('run-auto-retry-agent', [
+    taskRecord({ id: 'auto-retry-agent', agent: 'auto', cwd, attempts: [cwd, cwd], attemptAgents: ['codex', 'claude'] }),
+  ]));
+  const tokscale = new FakeTokscale({
+    codex: [entry('codex', 'gpt', { input: 2, output: 3, messages: 1 }, { workspaceKey: cwd })],
+    claude: [entry('claude', 'opus', { input: 7, output: 8, messages: 1 }, { workspaceKey: '-cao-workspaces-auto-same-cwd' })],
+  });
+  const service = new UsageService({ stateRoot: root, tokscale });
+
+  const report = await service.query({ run: 'run-auto-retry-agent', task: 'auto-retry-agent', home });
+  assert.equal(report.status, 'ok');
+  assert.deepEqual(report.rows.map(row => [row.agent, row.taskIds, row.totalTokens]), [
+    ['claude', ['auto-retry-agent'], 15],
+    ['codex', ['auto-retry-agent'], 5],
+  ]);
+  assert.deepEqual(report.coverage, [{
+    taskId: 'auto-retry-agent',
+    agent: 'multiple',
+    status: 'workspace_matched',
+    attempts: 2,
+    expectedWorkspaces: 2,
+    matchedWorkspaces: 2,
+  }]);
+  assert.equal(report.totals.totalTokens, 20);
+
+  const codexOnly = await service.query({ run: 'run-auto-retry-agent', task: 'auto-retry-agent', agent: 'codex', home });
+  assert.equal(codexOnly.status, 'ok');
+  assert.deepEqual(codexOnly.rows.map(row => row.agent), ['codex']);
+  assert.equal(codexOnly.totals.totalTokens, 5);
+  assert.deepEqual(codexOnly.coverage, [{
+    taskId: 'auto-retry-agent',
+    agent: 'codex',
+    status: 'workspace_matched',
+    attempts: 2,
+    expectedWorkspaces: 1,
+    matchedWorkspaces: 1,
+  }]);
 });
 
 test('reused worktree attempts count a workspace only once', async t => {

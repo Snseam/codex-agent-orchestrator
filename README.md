@@ -3,20 +3,21 @@
 **AI coding agent orchestration with Herdr, Git worktrees, and independent verification.**
 
 [![CI](https://github.com/Snseam/codex-agent-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/Snseam/codex-agent-orchestrator/actions/workflows/ci.yml)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Agent support](#agent-support) · [Token usage](#token-usage) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Execution profiles](#execution-profiles) · [Agent support](#agent-support) · [Token usage](#token-usage) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
 
-Codex Agent Orchestrator (**CAO**) is a local, zero-dependency Node.js CLI for coordinating coding agents through [Herdr](https://github.com/herdrdev/herdr). Let Codex App plan the work, assign scoped tasks to Claude Code or other agent sessions, and verify their changes before integrating them into your project.
+Codex Agent Orchestrator (**CAO**) is a local, zero-dependency Node.js CLI for coordinating coding agents through [Herdr](https://github.com/herdrdev/herdr). Let Codex App or Codex CLI plan the work, assign scoped tasks to Claude Code or other agent sessions, and verify their changes before integrating them into your project.
 
-> **Early preview.** The Claude Code workflow has passed local end-to-end tests, including controlled failure and repair. Other adapters are implemented but not yet verified end to end. Large-scale speed and completion-rate gains have not been measured.
+> **Early preview.** The base Claude Code workflow has passed local end-to-end tests, including controlled failure and repair. Profiled execution has also been checked with Herdr 0.9+ using two Claude sessions against a local Anthropic-compatible test server. Codex and Pi profile requests have passed local mock API checks; their complete Herdr workflows and OpenCode remain unverified. Large-scale speed, quality, and cost effects have not been measured.
 
 ## Why CAO?
 
 - **Coordinate existing agents.** Use Herdr-managed sessions while preserving each CLI's provider and model configuration.
+- **Choose execution profiles.** Route tasks to native Claude, Codex, Pi, or OpenCode profiles with local relay gateways, stored secrets, fallbacks, and capacity reservations.
 - **Isolate parallel work.** Assign independent tasks separate Git worktrees, declared file ownership, dependencies, and run capacity.
 - **Verify actual changes.** Check result identity and file scope, stop the worker, then run your acceptance commands against its candidate.
 - **Repair with evidence.** Start a new attempt with failed check output and the previous worktree's changes intact.
@@ -50,7 +51,7 @@ Each stage is an explicit CLI command. Task submission is not completion: `colle
 
 ### 1. Prerequisites
 
-- **Node.js 22+** and **Git**.
+- **Node.js 22.13+** and **Git**.
 - [Herdr](https://github.com/herdrdev/herdr) installed and available on `PATH`.
 - A supported coding agent CLI, already configured with its provider and credentials.
 - A target Git repository with at least one commit.
@@ -134,16 +135,35 @@ node bin/cao.mjs cleanup --run demo
 
 By default, commands return JSON, with errors on stderr; `--help` prints usage. State lives outside the target project, by default under `~/.local/state/codex-agent-orchestrator` or `$XDG_STATE_HOME/codex-agent-orchestrator`. Use the same `--state-dir` across commands and runs that coordinate one project.
 
+## Execution profiles
+
+Execution profiles are optional. They let CAO select a native agent, model, upstream endpoint, credential reference, and routing policy per task while keeping global provider files unchanged. Profiles can be authored directly or imported from a read-only CC Switch database. Stored secrets are read from stdin or environment references; secret values are never stored in profile JSON.
+
+Useful commands:
+
+```bash
+node bin/cao.mjs profile put --file profile.json --default
+printf '%s\n' "$ANTHROPIC_API_KEY" | node bin/cao.mjs secret set --id anthropic-main --stdin
+node bin/cao.mjs source discover --directory ~/.cc-switch
+node bin/cao.mjs profile import-cc-switch --provider claude-main --app claude --id claude-main
+node bin/cao.mjs route explain --file work/task.json
+node bin/cao.mjs gateway list
+```
+
+Routing supports fixed profiles and automatic `agent: "auto"` selection. A default profile is an execution selector too: if a legacy task omits `execution`, CAO can use the default profile, including for `agent: "auto"`. With a concrete task agent, the default must still be compatible with that agent.
+
+The first CC Switch source adapter targets schema version 18 and supports direct Claude API records from `settings_config.env` plus explicit `--allow-shared` reuse of the active Claude proxy. OAuth-only and non-Claude records are listed as unsupported rather than imported as direct profiles. See [execution profiles and routing](docs/execution-profiles.md).
+
 ## Agent support
 
 | Agent | Task value | Current validation |
 | --- | --- | --- |
-| Claude Code | `claude` | Local live workflow and controlled repair verified |
-| Pi | `pi` | Launch adapter implemented; live workflow not yet verified |
-| OpenCode | `opencode` | Launch adapter implemented; live workflow not yet verified |
-| Codex CLI | `codex` | Launch adapter implemented; live workflow not yet verified |
+| Claude Code | `claude` | Local live workflow and controlled repair verified; profiled local relay verified with a simulated Anthropic API |
+| Pi | `pi` | Native CLI profile request verified against a mock API; complete Herdr workflow not yet verified |
+| OpenCode | `opencode` | Launch and profiled runtime adapter implemented; live workflow not yet verified |
+| Codex CLI | `codex` | Native CLI profile request verified against a mock API; complete Herdr workflow not yet verified |
 
-`agentArgs` forwards CLI-specific options. `nativeInstructions` describes how a worker should use its available native tools. `maxChildren` is a reporting contract, not a measured or enforced count of running subagents. See the [adapter architecture](docs/architecture.md).
+`agentArgs` forwards CLI-specific options in inherited mode. Profiled tasks reject arguments that would conflict with profile-owned model, provider, session, config, or worktree settings; Codex allows selected reasoning and verbosity `-c` overrides. `nativeInstructions` describes how a worker should use its available native tools. `maxChildren` is a reporting contract, not a measured or enforced count of running subagents. See the [adapter architecture](docs/architecture.md) and [execution profiles](docs/execution-profiles.md).
 
 ## Token usage
 
@@ -165,7 +185,7 @@ Use `--tokscale-bin /path/to/tokscale` or `CAO_TOKSCALE_BIN=/path/to/tokscale` w
 - Interrupted verification fails closed and needs process/evidence inspection. `resume` does not blindly resend work or replay checks.
 - CAO does not automatically commit, push, publish, install dependencies, or change model providers.
 
-Initial validation included **67 local tests** and **two live Claude Code scenarios**. The suite is now separated into offline tests and an explicit Herdr integration test. One early run needed an extra Enter for a long pasted prompt; task-file dispatch passed a subsequent normal run without input after task submission. New-directory trust was handled in both scenarios. These are functional checks, not performance benchmarks.
+Validation evidence includes offline tests, explicit Herdr checks, base Claude Code live scenarios, and a profiled execution smoke with Herdr 0.9+ using two Claude sessions against a local simulated Anthropic API. The profiled smoke covered separate profile model/key routing, Read/Write/Bash/tool submission, independent acceptance, 16 matched gateway requests, unchanged global provider files, and runtime release. This is functional integration evidence, not a measurement of real model quality, provider billing, or production reliability.
 
 ## Development
 
@@ -182,7 +202,8 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 
 | Resource | Contents |
 | --- | --- |
-| [Architecture](docs/architecture.md) | CLI, state store, Herdr runtime, Git isolation, verification |
+| [Architecture](docs/architecture.md) | CLI, state store, Herdr runtime, Git isolation, verification, profiled execution |
+| [Execution profiles and routing](docs/execution-profiles.md) | Profile CRUD, secrets, CC Switch import, routing, gateway lifecycle |
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
 | [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
 | [Codex skill draft](skills/herdr-dev/SKILL.md) | Guidance for driving CAO from Codex; not installed automatically |

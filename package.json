@@ -5,7 +5,7 @@
   "description": "CLI for Codex-led AI coding agent orchestration via Herdr, with Git worktree isolation and independent verification.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "bin": {
     "cao": "bin/cao.mjs"
@@ -14,6 +14,7 @@
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:profiles": "node scripts/smoke-profiles.mjs",
     "test:herdr": "node --test tests/integration/herdr.test.mjs",
     "test:tokscale": "node --test tests/integration/tokscale.test.mjs"
   },

@@ -9,6 +9,10 @@ import * as git from './git.mjs';
 import { Herdr } from './runtime/herdr.mjs';
 import { runCommand } from './process.mjs';
 import { buildLaunch, compilePrompt, compileDispatchPrompt } from './adapters.mjs';
+import { ProfileStore } from './profiles.mjs';
+import { GatewayManager } from './gateway/manager.mjs';
+import { selectRoute, reserveExecution, releaseExecution, explainRoute } from './routing.mjs';
+import { prepareExecution, cleanupExecution } from './execution-config.mjs';
 
 const time = () => new Date().toISOString();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -27,10 +31,13 @@ export function defaultStateRoot() {
 }
 
 export class Orchestrator {
-  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand } = {}) {
+  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution } = {}) {
     this.root = path.resolve(stateRoot);
     this.herdr = herdr;
     this.command = command;
+    this.profiles = profiles || new ProfileStore({ root: this.root });
+    this.gateways = gateways || new GatewayManager({ root: this.root, profiles: this.profiles });
+    this.materialize = materialize;
   }
 
   async _loadRun(id) {
@@ -171,6 +178,8 @@ export class Orchestrator {
     const update = fn => this._update(run.id, task.definition.id, attempt.id, fn);
     try {
       await fs.mkdir(attempt.directory, { recursive: true, mode: 0o700 });
+      await this._configureExecution(run, task, attempt);
+      await this._cancelCheck(run.id, task.definition.id);
       if (!attempt.cwd) {
         if (task.definition.isolation === 'worktree') {
           const info = await git.getProjectInfo(run.project);
@@ -181,8 +190,19 @@ export class Orchestrator {
       }
       await update(a => { a.cwd = attempt.cwd; a.baseline = attempt.baseline; a.baselineTree = attempt.baselineTree; });
       await state.writeJsonAtomic(path.join(attempt.directory, 'task.json'), task.definition);
-      await fs.writeFile(path.join(attempt.directory, 'prompt.txt'), compilePrompt(task.definition, attempt), { mode: 0o600 });
+      await fs.writeFile(path.join(attempt.directory, 'prompt.txt'), compilePrompt(this._effectiveTask(task.definition, attempt), attempt), { mode: 0o600 });
       await this._cancelCheck(run.id, task.definition.id);
+      if (attempt.execution) {
+        const gatewayId = `gw-${crypto.createHash('sha256').update(run.id + attempt.id).digest('hex').slice(0, 24)}`;
+        await update(a => { a.execution.gatewayId = gatewayId; });
+        const gateway = await this.gateways.start({ id: gatewayId, snapshots: attempt.execution.snapshots, requireCapabilities: task.definition.execution?.requireCapabilities || [], allowShared: attempt.execution.allowShared });
+        attempt.execution.gateway = gateway;
+        await update(a => { a.execution.gateway = gateway; });
+        await this._cancelCheck(run.id, task.definition.id);
+        const manifest = await this.materialize({ task: task.definition, attempt, profile: attempt.execution.profile, gateway });
+        attempt.launchManifest = manifest;
+        await update(a => { a.launchManifest = manifest; a.nativeSession = manifest.nativeSession; });
+      }
       const server = await state.withLock(path.join(state.runPath(this.root, run.id), '.server.lock'), () => this.herdr.ensureServer(run.herdrSession, path.join(state.runPath(this.root, run.id), 'herdr-server.log')), { timeoutMs: 15000 });
       await this._change(run.id, r => { r.server ||= server; });
       await this._cancelCheck(run.id, task.definition.id);
@@ -191,7 +211,11 @@ export class Orchestrator {
       invariant(pane?.pane_id && pane?.terminal_id, 'invalid_runtime_response', 'Herdr did not return a pane and terminal identity.');
       await update(a => { a.paneId = pane.pane_id; a.terminalId = pane.terminal_id; a.workspaceId = pane.workspace_id; a.status = a.cancelRequested ? 'cancelling' : 'launching'; });
       await this._cancelCheck(run.id, task.definition.id);
-      const launch = buildLaunch(task.definition, attempt.directory);
+      if (attempt.launchManifest) {
+        await this.herdr.prepareEnvironment(run.herdrSession, pane.pane_id, attempt.launchManifest);
+        await this._cancelCheck(run.id, task.definition.id);
+      }
+      const launch = attempt.launchManifest || buildLaunch(task.definition, attempt.directory);
       await this.herdr.startAgent(run.herdrSession, attempt.workerName, launch.kind, pane.pane_id, launch.args);
       await this._captureIdentity(run.id, task.definition.id);
       await this._cancelCheck(run.id, task.definition.id);
@@ -209,9 +233,77 @@ export class Orchestrator {
           a.lastError = serializeError(error);
           a.status = !a.paneId ? 'failed' : (a.submissionStartedAt ? 'uncertain' : 'needs_input');
         });
+        if (!now.attempt.paneId) {
+          await update(a => { a.workerClosed = true; });
+          await this._releaseRuntime(run.id, task.definition.id, attempt.id);
+        }
       }
     } finally {
       await update(a => { a.launchFinishedAt = time(); if (a.cancelRequested && !a.paneId) { a.workerClosed = true; a.status = 'cancelled'; } });
+      const latest = await this._attempt(run.id, task.definition.id);
+      if (latest.attempt.workerClosed) await this._releaseRuntime(run.id, task.definition.id, attempt.id);
+    }
+  }
+
+  _effectiveTask(definition, attempt) {
+    return attempt.execution ? { ...definition, agent: attempt.execution.agent } : definition;
+  }
+
+  async _configureExecution(run, task, attempt) {
+    const defaultProfile = task.definition.execution ? null : await this.profiles.getDefault();
+    const selector = task.definition.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
+    if (!selector) {
+      invariant(task.definition.agent !== 'auto', 'execution_required', 'agent:auto requires an execution selector or a default profile.');
+      return;
+    }
+    const owner = { runId: run.id, taskId: task.definition.id, attemptId: attempt.id };
+    const selected = await selectRoute(this.profiles, selector, owner, { agent: task.definition.agent === 'auto' ? null : task.definition.agent });
+    const execution = {
+      agent: selected.profile.agent, model: selected.profile.model, profileId: selected.profile.id,
+      profileRevision: selected.profile.revision, profile: selected.profile, decision: selected.decision,
+      selector: structuredClone(selector), selectorSource: task.definition.execution ? 'task' : 'default-profile',
+      allowShared: selector.allowShared === true, reservations: [selected.reservation], snapshots: [selected.profile],
+      excludedFallbacks: [], gateway: null, configuredAt: time(),
+    };
+    attempt.execution = execution;
+    await this._update(run.id, task.definition.id, attempt.id, a => { a.execution = structuredClone(execution); });
+    for (const id of selected.profile.fallbacks) {
+      if (id === selected.profile.id) continue;
+      const decision = await explainRoute(this.profiles, { profile: id, requireCapabilities: selector.requireCapabilities || [], allowShared: execution.allowShared }, { agent: execution.agent });
+      invariant(decision.selectedProfileId, 'fallback_unavailable', 'Configured fallback profile is not eligible.', { profileId: id, decision });
+      const fallback = await this.profiles.resolve(id);
+      invariant(fallback.protocol === selected.profile.protocol, 'fallback_incompatible', 'Fallback protocol must match the selected profile.');
+      try {
+        const reservation = await reserveExecution(this.root, fallback, owner);
+        if (!execution.reservations.some(r => r.id === reservation.id)) execution.reservations.push(reservation);
+        execution.snapshots.push(fallback);
+      } catch (error) {
+        if (error.code !== 'route_capacity_exhausted') throw error;
+        execution.excludedFallbacks.push({ profileId: id, reason: 'capacity_exhausted' });
+      }
+      await this._update(run.id, task.definition.id, attempt.id, a => { a.execution = structuredClone(execution); });
+    }
+  }
+
+  async _releaseRuntime(runId, taskId, attemptId) {
+    const { attempt } = await this._attempt(runId, taskId);
+    if (!attempt.execution || attempt.runtimeReleasedAt) return;
+    invariant(attempt.id === attemptId && attempt.workerClosed, 'worker_not_stopped', 'Stop the worker before releasing its execution resources.');
+    try {
+      const gatewayId = attempt.execution.gateway?.id || attempt.execution.gatewayId;
+      if (gatewayId) {
+        const deadline = Date.now() + 5000;
+        while (true) {
+          try { await this.gateways.stop(gatewayId); break; }
+          catch (error) { if (error.code !== 'gateway_busy' || Date.now() >= deadline) throw error; await sleep(100); }
+        }
+      }
+      const resources = await cleanupExecution(attempt.launchManifest);
+      for (const reservation of attempt.execution.reservations) await releaseExecution(this.root, reservation);
+      await this._update(runId, taskId, attemptId, a => { a.runtimeReleasedAt = time(); a.executionCleanup = resources; delete a.runtimeCleanupError; });
+    } catch (error) {
+      await this._update(runId, taskId, attemptId, a => { a.runtimeCleanupError = serializeError(error); });
+      throw error;
     }
   }
 
@@ -230,7 +322,7 @@ export class Orchestrator {
       a.submissionStartedAt = time(); a.status = 'sending';
     });
     try {
-      await this.herdr.prompt(run.herdrSession, attempt.workerName, compileDispatchPrompt(task.definition, claimed), 0);
+      await this.herdr.prompt(run.herdrSession, attempt.workerName, compileDispatchPrompt(this._effectiveTask(task.definition, claimed), claimed), 0);
       await this._update(runId, taskId, attempt.id, a => {
         a.submissionAcknowledgedAt = time();
         a.status = a.cancelRequested ? 'cancelling' : 'running';
@@ -424,7 +516,9 @@ export class Orchestrator {
       invariant((await git.snapshot(attempt.cwd)).hash === attempt.snapshot.hash, 'candidate_changed', 'Candidate changed since collection; recollect or retry.');
       if (attempt.status === 'accepted') return this.inspect(runId, taskId);
       await this._closeWorker(run, attempt);
-      await this._update(runId, taskId, attempt.id, a => { invariant(!a.cancelRequested, 'cancel_requested', 'Verification was cancelled.'); a.workerClosed = true; a.status = 'verifying'; a.operation = { kind: 'verification', pid: process.pid, host: os.hostname(), finishedAt: null }; });
+      await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
+      await this._releaseRuntime(runId, taskId, attempt.id);
+      await this._update(runId, taskId, attempt.id, a => { invariant(!a.cancelRequested, 'cancel_requested', 'Verification was cancelled.'); a.status = 'verifying'; a.operation = { kind: 'verification', pid: process.pid, host: os.hostname(), finishedAt: null }; });
       const checks = [];
       let validationError;
       try {
@@ -478,6 +572,7 @@ export class Orchestrator {
       await this._closeWorker(run, attempt);
       await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
     }
+    await this._releaseRuntime(runId, taskId, attempt.id);
     const evidence = [];
     for (const check of attempt.verification?.checks || []) {
       if (check.status === 'passed') continue;
@@ -493,7 +588,10 @@ export class Orchestrator {
   async cancel(runId, taskId) {
     const { run, attempt } = await this._attempt(runId, taskId);
     if (['integration_failed', 'integration_cancelled'].includes(attempt.status)) return this.inspect(runId, taskId);
-    if (['cancelled', 'accepted', 'integrated'].includes(attempt.status)) return this.inspect(runId, taskId);
+    if (['cancelled', 'accepted', 'integrated'].includes(attempt.status)) {
+      if (attempt.workerClosed) await this._releaseRuntime(runId, taskId, attempt.id);
+      return this.inspect(runId, taskId);
+    }
     await this._update(runId, taskId, attempt.id, a => { a.cancelRequested = true; a.status = 'cancelling'; });
     if (['verifying', 'integrating'].includes(attempt.status)) return this.inspect(runId, taskId);
     try {
@@ -502,6 +600,7 @@ export class Orchestrator {
       if (attempt.paneId || attempt.launchFinishedAt || (attempt.launcherHost === os.hostname() && !alive(attempt.launcherPid))) {
         const unchanged = !attempt.cwd || (attempt.baseline && (await git.snapshot(attempt.cwd)).hash === attempt.baseline.hash);
         await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; a.status = 'cancelled'; a.checkoutReleased = Boolean(unchanged); });
+        await this._releaseRuntime(runId, taskId, attempt.id);
       }
     } catch (error) { await this._update(runId, taskId, attempt.id, a => { a.lastError = serializeError(error); }); }
     return this.inspect(runId, taskId);
@@ -589,6 +688,10 @@ export class Orchestrator {
       r.closedAt ||= time();
       return structuredClone(r);
     });
+    for (const task of Object.values(run.tasks)) {
+      const attempt = current(task);
+      if (attempt.workerClosed) await this._releaseRuntime(runId, task.definition.id, attempt.id);
+    }
     await this.herdr.stopServer(run.herdrSession);
     await this._change(runId, r => { r.serverStoppedAt = time(); });
     return { runId, serverStopped: true, retained: 'Worktrees, task records and evidence are retained. No project files were removed.' };
