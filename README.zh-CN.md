@@ -8,7 +8,7 @@
 
 [English](README.md) · **简体中文**
 
-[快速开始](#快速开始) · [工作原理](#工作原理) · [Agent 支持](#agent-支持) · [文档](#文档) · [参与贡献](CONTRIBUTING.md)
+[快速开始](#快速开始) · [工作原理](#工作原理) · [Agent 支持](#agent-支持) · [Token 用量](#token-用量) · [文档](#文档) · [参与贡献](CONTRIBUTING.md)
 
 Codex Agent Orchestrator（**CAO**）是本地运行、零运行依赖的 Node.js CLI，通过 [Herdr](https://github.com/herdrdev/herdr) 协调多个编程 Agent。由 Codex App 规划工作，将范围明确的任务分配给 Claude Code 或其他 Agent 会话，独立验收通过后再整合到项目。
 
@@ -132,7 +132,7 @@ node bin/cao.mjs integrate --run demo --task fix-add
 node bin/cao.mjs cleanup --run demo
 ```
 
-命令返回 JSON，错误写入 stderr；`--help` 显示用法。状态保存在目标项目外，默认位于 `~/.local/state/codex-agent-orchestrator` 或 `$XDG_STATE_HOME/codex-agent-orchestrator`。协调同一项目的命令和 run 应使用相同 `--state-dir`。
+命令默认返回 JSON，错误写入 stderr；`--help` 显示用法。状态保存在目标项目外，默认位于 `~/.local/state/codex-agent-orchestrator` 或 `$XDG_STATE_HOME/codex-agent-orchestrator`。协调同一项目的命令和 run 应使用相同 `--state-dir`。
 
 ## Agent 支持
 
@@ -144,6 +144,17 @@ node bin/cao.mjs cleanup --run demo
 | Codex CLI | `codex` | 已实现启动适配；真实流程待验证 |
 
 `agentArgs` 透传 CLI 启动参数；`nativeInstructions` 说明如何使用实际可用的原生工具。`maxChildren` 是报告契约，不是对子代理数量的监测或强制限制。详见[适配器架构](docs/zh-CN/architecture.md)。
+
+## Token 用量
+
+CAO 可以通过可选的外部 Tokscale CLI 查询本机 token 记录。Tokscale 不是 CAO 运行时依赖；需要报告时请单独安装：
+
+```bash
+npm install -g @tokscale/cli@4.16.0
+node bin/cao.mjs usage --today
+```
+
+如果二进制不在 `PATH` 中，可使用 `--tokscale-bin /path/to/tokscale` 或 `CAO_TOKSCALE_BIN=/path/to/tokscale`。默认输出 JSON；加 `--table` 输出紧凑表格。本机报告覆盖 `claude`、`codex`、`pi`、`opencode` 的本地记录。run/task 报告是 workspace 范围，始终设置 `attribution.exactTaskAttribution: false`，不能证明精确 task 因果用量。CAO 只调用 Tokscale 本地 `models --json` 报告，不输出金额，也不会调用 Tokscale `submit`、`autosubmit`、`usage` 或任何模型。详见 [Token 用量报告](docs/zh-CN/usage.md)。
 
 ## 验证与当前边界
 
@@ -173,6 +184,7 @@ npm run smoke -- --live           # 受控失败 → 修复 → 集成
 | --- | --- |
 | [架构与模块](docs/zh-CN/architecture.md) | CLI、状态存储、Herdr 适配、Git 隔离与验证 |
 | [任务状态与恢复](docs/zh-CN/states.md) | 结果契约、重试、交互、checkout 与集成阻塞 |
+| [Token 用量报告](docs/zh-CN/usage.md) | 可选 Tokscale 集成、JSON 形状与归属边界 |
 | [Codex 技能草案](skills/herdr-dev/SKILL.md) | 由 Codex 驱动 CAO 的流程指引，不自动安装 |
 | [更新日志](CHANGELOG.md) | 版本变化 |
 | [English documentation](README.md) | 英文概览与快速开始 |

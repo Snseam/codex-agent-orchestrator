@@ -8,7 +8,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Agent support](#agent-support) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Agent support](#agent-support) · [Token usage](#token-usage) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
 
 Codex Agent Orchestrator (**CAO**) is a local, zero-dependency Node.js CLI for coordinating coding agents through [Herdr](https://github.com/herdrdev/herdr). Let Codex App plan the work, assign scoped tasks to Claude Code or other agent sessions, and verify their changes before integrating them into your project.
 
@@ -132,7 +132,7 @@ node bin/cao.mjs integrate --run demo --task fix-add
 node bin/cao.mjs cleanup --run demo
 ```
 
-Commands return JSON, with errors on stderr; `--help` prints usage. State lives outside the target project, by default under `~/.local/state/codex-agent-orchestrator` or `$XDG_STATE_HOME/codex-agent-orchestrator`. Use the same `--state-dir` across commands and runs that coordinate one project.
+By default, commands return JSON, with errors on stderr; `--help` prints usage. State lives outside the target project, by default under `~/.local/state/codex-agent-orchestrator` or `$XDG_STATE_HOME/codex-agent-orchestrator`. Use the same `--state-dir` across commands and runs that coordinate one project.
 
 ## Agent support
 
@@ -144,6 +144,17 @@ Commands return JSON, with errors on stderr; `--help` prints usage. State lives 
 | Codex CLI | `codex` | Launch adapter implemented; live workflow not yet verified |
 
 `agentArgs` forwards CLI-specific options. `nativeInstructions` describes how a worker should use its available native tools. `maxChildren` is a reporting contract, not a measured or enforced count of running subagents. See the [adapter architecture](docs/architecture.md).
+
+## Token usage
+
+CAO can query local token records through the optional external Tokscale CLI. Tokscale is not a CAO runtime dependency; install it separately if you want reports:
+
+```bash
+npm install -g @tokscale/cli@4.16.0
+node bin/cao.mjs usage --today
+```
+
+Use `--tokscale-bin /path/to/tokscale` or `CAO_TOKSCALE_BIN=/path/to/tokscale` when the binary is not on `PATH`. JSON is the default output; add `--table` for a compact terminal view. Machine reports cover local records for `claude`, `codex`, `pi`, and `opencode`. Run/task reports are workspace-scoped and always set `attribution.exactTaskAttribution: false`; they do not prove exact causal task usage. CAO calls only Tokscale local `models --json` reports, omits costs, and never calls Tokscale `submit`, `autosubmit`, `usage`, or any model. See [token usage reports](docs/usage.md).
 
 ## Verification and boundaries
 
@@ -173,6 +184,7 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 | --- | --- |
 | [Architecture](docs/architecture.md) | CLI, state store, Herdr runtime, Git isolation, verification |
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
+| [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
 | [Codex skill draft](skills/herdr-dev/SKILL.md) | Guidance for driving CAO from Codex; not installed automatically |
 | [Changelog](CHANGELOG.md) | Release history |
 | [中文文档](README.zh-CN.md) | Chinese overview and getting started |
