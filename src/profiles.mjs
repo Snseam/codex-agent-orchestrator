@@ -16,6 +16,7 @@ const publicKeys = new Set([
   'id', 'name', 'agent', 'model', 'protocol', 'endpoint', 'credential', 'source', 'enabled',
   'capabilities', 'priority', 'account', 'quota', 'quality', 'speed', 'costPerMillion',
   'modelMap', 'fallbacks',
+  'modelMetadata',
 ]);
 const secretFieldPattern = /^(?:value|secret|token|apiKey|api_key|password|accessToken|refreshToken|clientSecret|privateKey)$/i;
 const envNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -280,6 +281,14 @@ export function validateProfile(input) {
   };
   invariant(agents.has(normalized.agent), 'invalid_profile', 'Unsupported agent.');
   invariant(protocols.has(normalized.protocol), 'invalid_profile', 'Unsupported protocol.');
+  if (input.modelMetadata !== undefined) {
+    invariant(plain(input.modelMetadata), 'invalid_profile', 'modelMetadata must be an object.');
+    rejectUnknown(input.modelMetadata, new Set(['contextWindow', 'maxOutputTokens']), 'modelMetadata');
+    const { contextWindow, maxOutputTokens } = input.modelMetadata;
+    invariant(Number.isSafeInteger(contextWindow) && contextWindow > 0 && contextWindow <= 4000000, 'invalid_profile', 'modelMetadata.contextWindow must be a positive integer no greater than 4000000.');
+    invariant(Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0 && maxOutputTokens <= contextWindow, 'invalid_profile', 'modelMetadata.maxOutputTokens must fit the context window.');
+    normalized.modelMetadata = { contextWindow, maxOutputTokens };
+  }
   invariant(Number.isInteger(normalized.priority), 'invalid_profile', 'priority must be an integer.');
   normalized.endpoint = normalizeEndpoint(input.endpoint, credential);
   return normalized;

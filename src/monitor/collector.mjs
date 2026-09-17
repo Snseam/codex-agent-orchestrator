@@ -6,6 +6,7 @@ import { caoNodeId, publicSnapshot } from './model.mjs';
 import { runCommand } from '../process.mjs';
 import { collectCodex } from './codex.mjs';
 import { collectClaude } from './claude.mjs';
+import { publicPerformance } from '../performance/index.mjs';
 
 const activeStates = new Set(['preparing', 'launching', 'ready', 'sending', 'running', 'needs_input', 'uncertain', 'cancelling']);
 const terminalStates = new Set(['accepted', 'integrated', 'failed', 'cancelled', 'rework', 'interrupted']);
@@ -43,14 +44,18 @@ function taskNode(run, task, attempt, now) {
   return {
     id: caoNodeId(run.id, task.definition.id, attempt.id), parentId: coordinator ? `codex:${coordinator}` : null,
     agent: attempt.execution?.agent || task.definition.agent, kind: 'agent',
+    executorKind: attempt.executorKind || 'external',
+    route: attempt.routeDecision ? { mode: attempt.routeDecision.mode, resourceId: attempt.routeDecision.resource?.id || null, preference: attempt.routeDecision.preference, reasons: attempt.routeDecision.reasons } : null,
+    nativeChildren: attempt.nativeChildren || null,
     label: `${task.definition.id} · ${attempt.number || 1}`, role: task.definition.role || 'implementer',
     model: attempt.execution?.model || null, projectId: run.project, runId: run.id, taskId: task.definition.id,
     attemptId: attempt.id, nativeSessionId: attempt.nativeSession?.id || attempt.telemetry?.nativeSessionId || null,
     status: taskStatus(attempt.status), statusLabel: attempt.status,
+    performance: attempt.performance ? publicPerformance(attempt, { now: new Date(now).toISOString(), taskId: task.definition.id }) : null,
     delivery: ['submitted', 'accepted', 'integrated', 'rework'].includes(attempt.status) ? attempt.status : null,
     startedAt: attempt.createdAt, updatedAt: run.updatedAt,
     finishedAt: terminalStates.has(attempt.status) ? attempt.integration?.finishedAt || attempt.verification?.finishedAt || run.updatedAt : null,
-    observedAt: new Date(now).toISOString(), stale: false, source: 'cao', confidence: 'observed', relation: 'cao', tokens: null,
+    observedAt: new Date(now).toISOString(), stale: false, source: 'cao', confidence: attempt.executorKind === 'host' ? 'reported' : 'observed', relation: 'cao', tokens: null,
   };
 }
 

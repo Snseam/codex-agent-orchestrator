@@ -53,6 +53,36 @@ test('repeat enable preserves previous settings unless explicit options update t
   assert.equal(updated.maxAttempts, 5);
 });
 
+test('adaptive mode stores on-demand calibration as schema 3 and preserves it across disable', async t => {
+  const { stateRoot, project } = await fixture(t);
+  const enabled = await enableConversationMode({
+    stateRoot, thread: 'thread-one', project, strategy: 'adaptive',
+    calibrationPolicy: 'on-demand', probeBudgetMs: '45000',
+  });
+  assert.equal(enabled.schemaVersion, 3);
+  assert.equal(enabled.strategy, 'adaptive');
+  assert.equal(enabled.calibrationPolicy, 'on-demand');
+  assert.equal(enabled.probeBudgetMs, 45000);
+
+  const disabled = await disableConversationMode({ stateRoot, thread: 'thread-one' });
+  assert.equal(disabled.enabled, false);
+  assert.equal(disabled.calibrationPolicy, 'on-demand');
+  assert.equal(disabled.probeBudgetMs, 45000);
+
+  const repeated = await enableConversationMode({ stateRoot, thread: 'thread-one' });
+  assert.equal(repeated.enabled, true);
+  assert.equal(repeated.calibrationPolicy, 'on-demand');
+  assert.equal(repeated.probeBudgetMs, 45000);
+
+  await assert.rejects(
+    enableConversationMode({ stateRoot, thread: 'thread-one', strategy: 'delegated' }),
+    error => error instanceof OrchestratorError && error.code === 'invalid_arguments',
+  );
+  const delegated = await enableConversationMode({ stateRoot, thread: 'thread-one', strategy: 'delegated', calibrationPolicy: 'off' });
+  assert.equal(delegated.strategy, 'delegated');
+  assert.equal(delegated.calibrationPolicy, 'off');
+});
+
 test('disable only flips the selected thread and missing status has no side effect', async t => {
   const { stateRoot, project } = await fixture(t);
   await enableConversationMode({ stateRoot, thread: 'thread-one', project, agent: 'codex' });
@@ -66,6 +96,50 @@ test('disable only flips the selected thread and missing status has no side effe
   assert.equal(missing.enabled, false);
   assert.equal(missing.identityAvailable, true);
   await assert.rejects(fs.lstat(path.join(stateRoot, 'conversations', 'missing-thread')), { code: 'ENOENT' });
+});
+
+test('legacy mode schemas load with calibration defaults', async t => {
+  const { stateRoot } = await fixture(t);
+  const first = path.join(stateRoot, 'conversations', 'thread-one', 'mode.json');
+  await fs.mkdir(path.dirname(first), { recursive: true });
+  await fs.writeFile(first, JSON.stringify({
+    schemaVersion: 1,
+    threadId: 'thread-one',
+    enabled: true,
+    project: null,
+    agent: null,
+    profile: null,
+    maxParallel: 2,
+    maxAttempts: 3,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }));
+  const loadedOne = await statusConversationMode({ stateRoot, thread: 'thread-one' });
+  assert.equal(loadedOne.schemaVersion, 1);
+  assert.equal(loadedOne.calibrationPolicy, 'off');
+  assert.equal(loadedOne.probeBudgetMs, 30000);
+
+  const second = path.join(stateRoot, 'conversations', 'thread-two', 'mode.json');
+  await fs.mkdir(path.dirname(second), { recursive: true });
+  await fs.writeFile(second, JSON.stringify({
+    schemaVersion: 2,
+    threadId: 'thread-two',
+    enabled: true,
+    strategy: 'adaptive',
+    preference: 'balanced',
+    project: null,
+    agent: null,
+    profile: null,
+    maxParallel: 2,
+    maxAttempts: 3,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }));
+  const loadedTwo = await statusConversationMode({ stateRoot, thread: 'thread-two' });
+  assert.equal(loadedTwo.schemaVersion, 2);
+  assert.equal(loadedTwo.strategy, 'adaptive');
+  assert.equal(loadedTwo.calibrationPolicy, 'off');
+  assert.equal(loadedTwo.probeBudgetMs, 30000);
 });
 
 test('mode requires identity for mutations and validates inputs strictly', async t => {
@@ -86,6 +160,9 @@ test('mode requires identity for mutations and validates inputs strictly', async
   await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project, agent: 'bad' }), /--agent/);
   await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project, maxParallel: '0' }), /--max-parallel/);
   await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project, maxAttempts: '21' }), /--max-attempts/);
+  await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project, calibrationPolicy: 'later' }), /--calibration-policy/);
+  await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project, strategy: 'shadow', calibrationPolicy: 'on-demand' }), /adaptive strategy/);
+  await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project, strategy: 'adaptive', probeBudgetMs: '60001' }), /--probe-budget-ms/);
   await assert.rejects(enableConversationMode({ stateRoot, thread: 'ok', project: path.join(project, 'missing') }), { code: 'ENOENT' });
 });
 

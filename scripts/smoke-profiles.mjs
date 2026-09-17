@@ -281,7 +281,7 @@ async function main() {
   const upstream = createMockAnthropicServer({ evidence, received });
 
   const store = new ProfileStore({ root: fixtureState.stateRoot });
-  const herdr = new Herdr({ environment: isolation.environment });
+  const herdr = new Herdr({ environment: isolation.environment, evidenceSource: 'mock' });
   const materialize = (input) => prepareExecution({ ...input, environment: isolation.environment });
   const service = new Orchestrator({ stateRoot: fixtureState.stateRoot, profiles: store, herdr, materialize });
   const inputs = smokeTasks();

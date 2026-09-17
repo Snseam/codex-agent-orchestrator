@@ -19,13 +19,28 @@ test('publicSnapshot exposes only browser contract fields and strips sensitive t
   }, now);
 
   assert.deepEqual(Object.keys(snapshot.nodes[0]).sort(), [
-    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'observedAt',
-    'parentId', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
+    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'executorKind', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'nativeChildren', 'route', 'observedAt',
+    'parentId', 'performance', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
   ].sort());
   const serialized = JSON.stringify(snapshot);
   assert.doesNotMatch(serialized, /PROMPT_SECRET|OBJECTIVE_SECRET|MESSAGE_SECRET|TOOL_SECRET|NODE_SECRET|PROJECT_SECRET|SOURCE_SECRET/);
   assert.equal(snapshot.nodes[0].label, 'Worker [31m');
   assert.doesNotMatch(snapshot.nodes[0].label, /[\x00-\x1f]/);
+});
+
+test('monitor timings expose bounded counters without forwarding task evidence', () => {
+  const snapshot = publicSnapshot({ scope: {}, projects: [], sources: [], nodes: [{ id: 'n', performance: {
+    phase: 'blocked', durationsMs: { prepare: 12, execute: -1, secret: 'PRIVATE' }, blockedMs: 15,
+    blocker: { category: 'permission', message: 'PRIVATE' }, progressState: { nonce: 'PRIVATE' },
+    evidence: { checks: ['PRIVATE'] }, coverage: { hasLegacyPrehistory: true },
+  } }] }, now);
+  const timing = snapshot.nodes[0].performance;
+  assert.equal(timing.phase, 'blocked');
+  assert.equal(timing.durationsMs.prepare, 12);
+  assert.equal(timing.durationsMs.execute, null);
+  assert.equal(timing.blockerCategory, 'permission');
+  assert.equal(timing.legacyPrehistory, true);
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });
 
 test('publicSnapshot falls back invalid enum and scalar values to safe public values', () => {
@@ -74,6 +89,31 @@ test('token metadata keeps an authoritative total without summing detail counter
   assert.equal(empty.nodes[1].tokens, 0);
 });
 
+test('publicSnapshot keeps host executorKind and adaptive-only route metadata', () => {
+  const snapshot = publicSnapshot({
+    nodes: [{
+      id: 'host-node', executorKind: 'host',
+      route: { mode: 'adaptive', resourceId: 'native-host', preference: 'balanced', reasons: ['preference:balanced'] },
+      nativeChildren: { state: 'verified', complete: true, source: 'controller-no-worker-created', children: [] },
+    }],
+    projects: [], sources: [], scope: {},
+  }, now);
+  assert.equal(snapshot.nodes[0].executorKind, 'host');
+  assert.deepEqual(snapshot.nodes[0].route, {
+    mode: 'adaptive', resourceId: 'native-host', preference: 'balanced', reasons: ['preference:balanced'],
+  });
+  assert.equal(snapshot.nodes[0].nativeChildren.state, 'verified');
+  assert.equal(snapshot.nodes[0].nativeChildren.complete, true);
+  assert.equal(snapshot.nodes[0].nativeChildren.count, 0);
+
+  const other = publicSnapshot({
+    nodes: [{ id: 'ext', executorKind: 'external', route: { mode: 'shadow', resourceId: 'secret' } }],
+    projects: [], sources: [], scope: {},
+  }, now);
+  assert.equal(other.nodes[0].executorKind, 'external');
+  assert.equal(other.nodes[0].route, null);
+});
+
 test('re-sanitizing snapshots cannot turn ambiguous or cyclic conversation ancestry into a confirmed group', () => {
   const root = { id: 'codex:root', nativeSessionId: 'root', agent: 'codex', kind: 'coordinator', relation: 'native' };
   for (const nodes of [[root, { ...root }], [{ ...root, parentId: 'codex:other' }, { ...root, id: 'codex:other', nativeSessionId: 'other', parentId: 'codex:root' }]]) {
@@ -83,4 +123,21 @@ test('re-sanitizing snapshots cannot turn ambiguous or cyclic conversation ances
     assert.deepEqual(second.conversations, []);
     assert.ok(second.nodes.every(n => n.conversationId === null));
   }
+});
+
+test('collector-to-server sanitization preserves child counts and timing evidence without private data', () => {
+  const first = publicSnapshot({
+    nodes: [{ id: 'attempt',
+      nativeChildren: { state: 'blocked', complete: false, source: 'claude-hooks', children: [{ id: 'private-child-id', status: 'running' }] },
+      performance: { phase: 'blocked', durationsMs: { execute: 100 }, blockedMs: 20,
+        blocker: { category: 'native_children', secret: 'PRIVATE' }, coverage: { hasLegacyPrehistory: true } },
+    }], projects: [], sources: [], scope: {},
+  }, now);
+  const second = publicSnapshot(first, now);
+  assert.deepEqual(second.nodes[0].nativeChildren, first.nodes[0].nativeChildren);
+  assert.deepEqual(second.nodes[0].performance, first.nodes[0].performance);
+  assert.equal(second.nodes[0].nativeChildren.count, 1);
+  assert.equal(second.nodes[0].performance.blockerCategory, 'native_children');
+  assert.equal(second.nodes[0].performance.legacyPrehistory, true);
+  assert.doesNotMatch(JSON.stringify(second), /private-child-id|PRIVATE/);
 });

@@ -6,6 +6,8 @@ CAO 是一个显式驱动的 CLI 控制器。它不是后台编排 daemon，不�
 
 ## 运行边界
 
+可选的前台监督器会为已有任务调用同一组执行阶段，持有 run 专属控制器锁，并在需要处理阻塞或轮询预算结束时返回；不会安装后台 daemon。状态提交后的性能事件与 attempt 计时只是观测，`run.json` 继续作为权威状态。详见[监督与性能记录](supervision.md)。
+
 ```text
 用户/Codex App
   -> node bin/cao.mjs <command>
@@ -55,7 +57,7 @@ Gateway 是同协议本地 relay，支持 Anthropic、OpenAI Responses 或 OpenA
 
 `prepareExecution` 写入每个 attempt 私有的原生配置，不修改全局 provider 文件。Claude Code 使用生成的 settings 文件和 session id；Codex CLI 使用 command-backed auth 和 `-c` provider override；Pi 使用 provider extension；OpenCode 通过 `OPENCODE_CONFIG_CONTENT` 使用 inline config。与 profile 管理范围冲突的原生命令参数会在启动前被拒绝。
 
-CC Switch source adapter 只读。第一版支持 schema version 18 中 `settings_config.env` 的 Claude direct API 记录，以及显式 `allowShared` 复用 active Claude proxy。OAuth-only 和非 Claude client 记录会显示为 unsupported 或 gateway-required，不会被导入为 direct profile。
+CC Switch source adapter 只读。支持 schema version 18 中 `settings_config.env` 的 Claude direct API 记录、显式 `allowShared` 复用 active Claude proxy，以及包含字面 key 和明确模型目录的 Pi API-provider 记录。OAuth-only 和其他未支持的 client 记录会显示为 unsupported 或 gateway-required。原生/NVM 发现和隔离探针边界见[资源发现与校准](resources.md)。
 
 ## Orchestrator：`src/orchestrator.mjs`
 

@@ -4,6 +4,8 @@
 
 This document describes CAO runs, attempts, isolation modes, holds, and recovery behavior. The authoritative state is `run.json` under the configured state root.
 
+An optional foreground `supervise` command advances these same states. Task `deadlineAt`, one-shot report repair, atomic submission, and phase timing are described in [supervision and performance](supervision.md). They do not turn native idle state into acceptance or clear checkout/integration holds.
+
 ## Run
 
 `init` creates a run with the target project root, base commit, baseline snapshot, initial dirty flag, max parallelism, and a CAO-owned Herdr session.

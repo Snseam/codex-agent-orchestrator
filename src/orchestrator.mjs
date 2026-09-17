@@ -14,25 +14,49 @@ import { GatewayManager } from './gateway/manager.mjs';
 import { selectRoute, reserveExecution, releaseExecution, explainRoute } from './routing.mjs';
 import { prepareExecution, cleanupExecution } from './execution-config.mjs';
 import { prepareClaudeTelemetry } from './monitor/claude.mjs';
+import { trackAttempt, summarizeRun } from './performance/index.mjs';
+import { preflightProject } from './preflight.mjs';
+import { validateResult } from './results.mjs';
+import { startHostTask, reportHostTask, releaseHostTask, assertHostOwner } from './host.mjs';
+import { ResourceService } from './resources/index.mjs';
+import { checkNativeChildren } from './native-children.mjs';
+import { recordTaskEvidence } from './resources/task-evidence.mjs';
 
 const time = () => new Date().toISOString();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const active = new Set(['integrating', 'preparing', 'launching', 'ready', 'sending', 'running', 'uncertain', 'needs_input', 'submitted', 'verifying', 'cancelling']);
 const integrationHold = a => ['integrating', 'integration_failed', 'integration_cancelled'].includes(a.status) || (a.status === 'cancelling' && a.operation?.kind === 'integration');
 const checkoutHold = t => t.definition.isolation === 'checkout' && !['accepted', 'integrated'].includes(current(t).status) && !current(t).checkoutReleased;
+const stopped = a => a.executorKind === 'host' ? Boolean(a.hostStoppedEvidence) : a.workerClosed;
 const missing = error => ['agent_not_found', 'agent_not_running', 'pane_not_found'].includes(error.code);
 const serializeError = e => ({ code: e.code || 'error', message: e.message, details: e.details || {} });
 const current = record => record.attempts.find(a => a.id === record.currentAttempt);
 const inside = (parent, child) => child === parent || child.startsWith(parent + path.sep);
 const hashFile = async file => crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } };
+const nativeProjectMarkers = {
+  claude: ['.claude', '.mcp.json', 'CLAUDE.md'],
+  pi: ['.pi', 'AGENTS.md', 'CLAUDE.md'],
+  codex: ['.codex', 'AGENTS.md', 'AGENTS.override.md'],
+  opencode: ['.opencode', 'opencode.json', 'opencode.jsonc', 'AGENTS.md'],
+};
+
+async function hasNativeProjectOverrides(agent, directories) {
+  for (const directory of new Set(directories.filter(Boolean))) {
+    for (const marker of nativeProjectMarkers[agent] || []) {
+      try { await fs.lstat(path.join(directory, marker)); return true; }
+      catch (error) { if (error.code !== 'ENOENT') return true; }
+    }
+  }
+  return false;
+}
 
 export function defaultStateRoot() {
   return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'codex-agent-orchestrator');
 }
 
 export class Orchestrator {
-  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution, telemetry = prepareClaudeTelemetry, coordinatorId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null } = {}) {
+  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution, telemetry = prepareClaudeTelemetry, resourceResolver, coordinatorId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null } = {}) {
     this.root = path.resolve(stateRoot);
     this.herdr = herdr;
     this.command = command;
@@ -40,10 +64,16 @@ export class Orchestrator {
     this.gateways = gateways || new GatewayManager({ root: this.root, profiles: this.profiles });
     this.materialize = materialize;
     this.telemetry = telemetry;
+    this.resourceResolver = resourceResolver || (id => new ResourceService({ root: this.root }).get(id));
     this.coordinatorId = typeof coordinatorId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(coordinatorId) ? coordinatorId : null;
   }
 
   async _loadRun(id) {
+    // init stores canonical owned paths. A later CLI invocation may receive the
+    // same root through a symlink (notably macOS /var -> /private/var).
+    // Use that same identity for telemetry validation and runtime cleanup.
+    try { this.root = await fs.realpath(this.root); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const run = await state.loadRun(this.root, id);
     invariant(run, 'run_not_found', `Run ${id} does not exist.`);
     invariant(run.schemaVersion === 1 && run.id === id && run.tasks && typeof run.project === 'string', 'invalid_run', 'Run record is invalid or uses an unsupported schema.');
@@ -75,9 +105,36 @@ export class Orchestrator {
     await this._loadRun(runId);
     return state.withLock(path.join(state.runPath(this.root, runId), '.lock'), async () => {
       const run = await this._loadRun(runId);
+      const previous = new Map(Object.values(run.tasks).flatMap(task => task.attempts.map(attempt => [attempt.id, structuredClone(attempt)])));
       const result = await action(run);
       run.updatedAt = time();
+      const changed = [];
+      for (const task of Object.values(run.tasks)) {
+        for (const attempt of task.attempts) {
+          const before = previous.get(attempt.id) || null;
+          attempt.performance = trackAttempt(before, attempt, run.updatedAt);
+          if (before?.performance?.progressFingerprint !== attempt.performance.progressFingerprint) changed.push({
+            taskId: task.definition.id, attemptId: attempt.id, status: attempt.status,
+            phase: attempt.performance.phase, durationsMs: attempt.performance.durationsMs,
+            blockedMs: attempt.performance.blockedMs, lastProgressAt: attempt.performance.lastProgressAt,
+          });
+        }
+      }
+      if (changed.length) run.performanceRevision = (run.performanceRevision || 0) + 1;
       await state.saveRun(this.root, run);
+      if (changed.length) {
+        try {
+          // Projection only: committed run state stays authoritative if append fails.
+          await state.appendEvent(this.root, runId, { type: 'performance.observed', schemaVersion: 1,
+            eventId: `${runId}:performance:${run.performanceRevision}`, sequence: run.performanceRevision,
+            ownerEpoch: run.supervisor?.owner?.epoch || null, attempts: changed });
+          run.performanceRecordedRevision = run.performanceRevision;
+          await state.saveRun(this.root, run);
+        } catch {
+          run.performanceEventsIncomplete = true;
+          await state.saveRun(this.root, run);
+        }
+      }
       return result;
     });
   }
@@ -104,7 +161,7 @@ export class Orchestrator {
     });
   }
 
-  async _reserve(runId, definition, feedback, retry = false) {
+  async _reserve(runId, definition, feedback, retry = false, { executorKind = 'external', ownerThreadId = null, routeDecision = null } = {}) {
     const initial = await this._loadRun(runId);
     const key = crypto.createHash('sha256').update(initial.project).digest('hex');
     return state.withLock(path.join(this.root, 'locks', `project-${key}`), () => this._change(runId, async run => {
@@ -113,21 +170,26 @@ export class Orchestrator {
       const digest = taskDigest(definition);
       if (record && !retry) {
         invariant(record.digest === digest, 'task_conflict', 'Task ID already exists with a different definition.');
+        invariant((current(record).executorKind || 'external') === executorKind, 'executor_conflict', 'Task belongs to a different execution path.');
+        if (executorKind === 'host') invariant(current(record).ownerThreadId === ownerThreadId, 'host_owner_mismatch', 'Host task belongs to another conversation.');
         return { duplicate: true, task: structuredClone(record), run: structuredClone(run) };
       }
       if (retry) {
         invariant(record, 'task_not_found', 'Cannot retry a missing task.');
+        invariant(record.digest === digest, 'task_conflict', 'A retry must preserve the original task definition and limits.');
         invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(current(record).status), 'attempt_active', 'Collect, verify or cancel the current attempt before retrying.');
         invariant(record.attempts.length < definition.maxAttempts, 'attempt_limit', 'The configured attempt limit was reached.');
-        invariant(current(record).workerClosed || !current(record).paneId, 'worker_not_stopped', 'The previous worker must be confirmed stopped before retrying.');
+        invariant((current(record).executorKind || 'external') === executorKind, 'executor_conflict', 'Retry must use the original execution path.');
+        invariant(executorKind === 'host' ? stopped(current(record)) : (current(record).workerClosed || !current(record).paneId), 'worker_not_stopped', 'The previous worker must be confirmed stopped before retrying.');
+        if (executorKind === 'host') invariant(current(record).ownerThreadId === ownerThreadId, 'host_owner_mismatch', 'Host task belongs to another conversation.');
       }
       for (const dependency of definition.dependsOn) {
         const predecessor = Object.hasOwn(run.tasks, dependency) ? run.tasks[dependency] : null;
         invariant(predecessor && ['accepted', 'integrated'].includes(current(predecessor).status), 'dependency_not_ready', `Dependency ${dependency} is not accepted.`);
         invariant(current(predecessor).status === 'integrated' || definition.isolation === 'checkout', 'dependency_not_integrated', `Integrate ${dependency} before creating a dependent worktree.`);
       }
-      const count = Object.values(run.tasks).filter(t => active.has(current(t).status)).length;
-      invariant(count < run.maxParallel, 'capacity_exceeded', 'Run capacity reached. Collect and verify or cancel existing work.');
+      const count = Object.values(run.tasks).filter(t => current(t).executorKind !== 'host' && active.has(current(t).status)).length;
+      invariant(executorKind === 'host' || count < run.maxParallel, 'capacity_exceeded', 'Run capacity reached. Collect and verify or cancel existing work.');
       for (const other of await state.listRuns(this.root)) {
         if (other.project !== run.project) continue;
         invariant(!Object.values(other.tasks || {}).some(t => integrationHold(current(t))), 'integration_recovery_required', 'The project has an incomplete integration. Inspect and recover it before starting new work.');
@@ -156,7 +218,16 @@ export class Orchestrator {
         baselineTree: previous?.baselineTree || null,
         launcherPid: process.pid, launcherHost: os.hostname(), launchFinishedAt: null,
         coordinatorThreadId: this.coordinatorId,
+        ...(definition.deadlineAt ? { deadlineAt: definition.deadlineAt } : {}),
       };
+      const binding = routeDecision || previous?.routeDecision;
+      if (binding) attempt.routeDecision = structuredClone(binding);
+      if (executorKind === 'host') {
+        Object.assign(attempt, { executorKind, ownerThreadId, deliveryMode: 'in-place', status: 'running',
+          cwd: run.project, baseline: previous?.baseline || await git.snapshot(run.project), hostStoppedEvidence: null,
+          coordinatorThreadId: ownerThreadId });
+        for (const field of ['workerName', 'paneId', 'terminalId', 'workerClosed', 'launcherPid', 'launcherHost', 'launchFinishedAt', 'submissionStartedAt']) delete attempt[field];
+      }
       record ||= { definition, digest, attempts: [] };
       record.attempts.push(attempt);
       record.currentAttempt = id;
@@ -166,23 +237,109 @@ export class Orchestrator {
     }));
   }
 
-  async dispatch(runId, input) {
+  async dispatch(runId, input, { routeDecision = null } = {}) {
     const task = validateTask(input);
-    const reserved = await this._reserve(runId, task);
+    const reserved = await this._reserve(runId, task, '', false, { routeDecision });
     if (reserved.duplicate) return { duplicate: true, ...(await this.inspect(runId, task.id)) };
     await this._launch(reserved);
     return this.inspect(runId, task.id);
   }
 
-  async _cancelCheck(runId, taskId) {
+  async preflight(runId, input) {
+    const run = await this._loadRun(runId);
+    const task = validateTask(input);
+    const defaultProfile = task.execution ? null : await this.profiles.getDefault();
+    const selector = task.execution?.native ? null : task.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
+    let agent = task.agent;
+    if (selector) {
+      const decision = await explainRoute(this.profiles, selector, { agent: agent === 'auto' ? null : agent });
+      invariant(decision.selectedProfileId, 'route_unavailable', 'No eligible execution profile.', { decision });
+      agent = (await this.profiles.get(decision.selectedProfileId)).agent;
+    }
+    invariant(agent !== 'auto', 'execution_required', 'agent:auto requires an execution profile.');
+    return preflightProject({ project: run.project, task: { ...task, agent }, runtime: this.herdr });
+  }
+
+  async performance(runId) {
+    return summarizeRun(await this._loadRun(runId));
+  }
+
+  async _nativeChildren(runId, task, attempt, report) {
+    if (!attempt.submissionStartedAt && !attempt.paneId) return { state: 'verified', complete: true, source: 'controller-no-worker-created', children: [], reasons: [] };
+    if (!attempt.submissionStartedAt && attempt.workerClosed) return { state: 'verified', complete: true, source: 'controller-stopped-before-assignment', children: [], reasons: [] };
+    const evidence = await checkNativeChildren({ root: this.root, runId, task: this._effectiveTask(task, attempt), attempt, report });
+    if (evidence.state === 'unknown' && attempt.routeDecision?.mode !== 'adaptive') return {
+      ...evidence, state: 'reported', complete: (report?.children || []).every(child => ['completed', 'cancelled'].includes(child.status)),
+      source: 'legacy-report-contract', reasons: [...evidence.reasons, 'legacy_report_contract'],
+    };
+    return evidence;
+  }
+
+  async _observeExecutionResource(run, task, attempt) {
+    // Observe before launch; never infer a past configuration from settings read
+    // after delivery. Legacy arguments and gateway fallbacks may change identity.
+    if (this.herdr.evidenceSource !== 'real') return;
+    let resource = attempt.routeDecision?.resource;
+    if (!resource && (attempt.execution || task.agentArgs.length)) return;
+    if (!resource) {
+      if (await hasNativeProjectOverrides(task.agent, [run.project, attempt.cwd])) return;
+      try { resource = await this.resourceResolver(`native-${task.agent}`); }
+      catch { return; } // Optional feedback must not prevent explicit native work.
+    }
+    if (!resource?.id || !resource.fingerprint || (!resource.installed && !attempt.routeDecision?.resource)) return;
+    const observation = { resourceId: resource.id, fingerprint: resource.fingerprint,
+      observedAt: time(), source: 'execution-config', evidenceSource: this.herdr.evidenceSource === 'real' ? 'real' : 'mock' };
+    attempt.resourceObservation = observation;
+    await this._update(run.id, task.id, attempt.id, a => { a.resourceObservation = observation; });
+  }
+
+  async _recordTaskReadiness(runId, taskId) {
+    const { task, attempt } = await this._attempt(runId, taskId);
+    if (attempt.executorKind === 'host' || !attempt.resourceObservation || attempt.readinessEvidence?.state === 'recorded') return;
+    let feedback;
+    try {
+      const resource = await this.resourceResolver(attempt.resourceObservation.resourceId);
+      if (resource?.fingerprint !== attempt.resourceObservation.fingerprint) feedback = { state: 'skipped', reason: 'resource_configuration_changed' };
+      else {
+        const result = await recordTaskEvidence({ root: this.root, runId, task: task.definition, attempt });
+        feedback = { state: result.recorded ? 'recorded' : 'skipped', reason: result.reason || null };
+      }
+    } catch {
+      // Verification is authoritative. Readiness is a best-effort projection.
+      feedback = { state: 'unavailable', reason: 'task_evidence_write_failed' };
+    }
+    try { await this._update(runId, taskId, attempt.id, a => { a.readinessEvidence = feedback; }); }
+    catch { /* Accepted run state remains authoritative if feedback persistence fails. */ }
+  }
+
+  async hostStart(runId, task, options) { return startHostTask(this, runId, task, options); }
+  async hostReport(runId, taskId, report, options) { return reportHostTask(this, runId, taskId, report, options); }
+  async hostRelease(runId, taskId, options) { return releaseHostTask(this, runId, taskId, options); }
+  async hostVerify(runId, taskId, { thread } = {}) {
+    const { attempt } = await this._attempt(runId, taskId);
+    assertHostOwner(this, attempt, thread);
+    return this.verify(runId, taskId, { hostThread: thread || this.coordinatorId });
+  }
+
+  async _cancelCheck(runId, taskId, { ignoreDeadline = false } = {}) {
     const { attempt } = await this._attempt(runId, taskId);
     if (attempt.cancelRequested) throw new OrchestratorError('cancel_requested', 'Attempt was cancelled during launch.');
+    if (!ignoreDeadline && attempt.deadlineAt && Date.parse(attempt.deadlineAt) <= Date.now()) {
+      await this._update(runId, taskId, attempt.id, a => { a.deadlineExceededAt ||= time(); });
+      throw new OrchestratorError('deadline_exceeded', 'Task deadline has passed.');
+    }
   }
 
   async _launch({ run, task, attempt }) {
     const update = fn => this._update(run.id, task.definition.id, attempt.id, fn);
     try {
       await fs.mkdir(attempt.directory, { recursive: true, mode: 0o700 });
+      if (attempt.routeDecision?.resource) {
+        const currentResource = await this.resourceResolver(attempt.routeDecision.resource.id);
+        invariant(currentResource?.fingerprint === attempt.routeDecision.resource.fingerprint, 'resource_configuration_changed', 'Selected resource changed since the routing decision. Re-evaluate before starting work.');
+      }
+      const preflight = await this.preflight(run.id, task.definition);
+      await update(a => { a.preflight = preflight; });
       await this._configureExecution(run, task, attempt);
       await this._cancelCheck(run.id, task.definition.id);
       if (!attempt.cwd) {
@@ -194,7 +351,9 @@ export class Orchestrator {
         attempt.baseline = await git.snapshot(attempt.cwd);
       }
       await update(a => { a.cwd = attempt.cwd; a.baseline = attempt.baseline; a.baselineTree = attempt.baselineTree; });
+      await this._observeExecutionResource(run, task.definition, attempt);
       await state.writeJsonAtomic(path.join(attempt.directory, 'task.json'), task.definition);
+      await state.writeJsonAtomic(path.join(attempt.directory, 'submission.json'), { schemaVersion: 1, id: attempt.id, nonce: attempt.nonce, resultFile: 'result.json' });
       await fs.writeFile(path.join(attempt.directory, 'prompt.txt'), compilePrompt(this._effectiveTask(task.definition, attempt), attempt), { mode: 0o600 });
       await this._cancelCheck(run.id, task.definition.id);
       if (attempt.execution) {
@@ -248,7 +407,7 @@ export class Orchestrator {
           a.status = !a.paneId ? 'failed' : (a.submissionStartedAt ? 'uncertain' : 'needs_input');
         });
         if (!now.attempt.paneId) {
-          await update(a => { a.workerClosed = true; });
+          await update(a => { a.workerClosed = true; if (!a.cwd) a.checkoutReleased = true; });
           await this._releaseRuntime(run.id, task.definition.id, attempt.id);
         }
       }
@@ -264,6 +423,18 @@ export class Orchestrator {
   }
 
   async _configureExecution(run, task, attempt) {
+    if (task.definition.execution?.native) {
+      const resource = attempt.routeDecision?.resource;
+      if (resource) {
+        const group = resource.quotaGroup?.id || '';
+        const capacity = { id: resource.id, protocol: `native-${resource.agent}`, endpoint: resource.endpoint || undefined,
+          account: { id: group.startsWith('account:') ? group.slice(8) : null, maxParallel: 1 } };
+        const reservation = await reserveExecution(this.root, capacity, { runId: run.id, taskId: task.definition.id, attemptId: attempt.id });
+        attempt.nativeReservation = reservation;
+        await this._update(run.id, task.definition.id, attempt.id, a => { a.nativeReservation = reservation; });
+      }
+      return;
+    }
     const defaultProfile = task.definition.execution ? null : await this.profiles.getDefault();
     const selector = task.definition.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
     if (!selector) {
@@ -281,6 +452,11 @@ export class Orchestrator {
     };
     attempt.execution = execution;
     await this._update(run.id, task.definition.id, attempt.id, a => { a.execution = structuredClone(execution); });
+    if (attempt.routeDecision?.mode === 'adaptive') {
+      execution.excludedFallbacks = selected.profile.fallbacks.map(profileId => ({ profileId, reason: 'adaptive_attempt_pinned' }));
+      await this._update(run.id, task.definition.id, attempt.id, a => { a.execution = structuredClone(execution); });
+      return;
+    }
     for (const id of selected.profile.fallbacks) {
       if (id === selected.profile.id) continue;
       const decision = await explainRoute(this.profiles, { profile: id, requireCapabilities: selector.requireCapabilities || [], allowShared: execution.allowShared }, { agent: execution.agent });
@@ -301,8 +477,15 @@ export class Orchestrator {
 
   async _releaseRuntime(runId, taskId, attemptId) {
     const { attempt } = await this._attempt(runId, taskId);
-    if ((!attempt.execution && !attempt.telemetry) || attempt.runtimeReleasedAt) return;
+    if (attempt.executorKind === 'host') return;
+    if ((!attempt.execution && !attempt.telemetry && !attempt.nativeReservation) || attempt.runtimeReleasedAt) return;
     invariant(attempt.id === attemptId && attempt.workerClosed, 'worker_not_stopped', 'Stop the worker before releasing its execution resources.');
+    const { task } = await this._attempt(runId, taskId);
+    if (attempt.telemetry?.enabled) {
+      const children = await this._nativeChildren(runId, task.definition, attempt, attempt.report);
+      await this._update(runId, taskId, attemptId, a => { a.nativeChildren = children; });
+      invariant(children.complete, 'native_children_unverified', 'Native children are not confirmed stopped; capacity is retained.');
+    }
     try {
       const gatewayId = attempt.execution?.gateway?.id || attempt.execution?.gatewayId;
       if (gatewayId) {
@@ -330,6 +513,7 @@ export class Orchestrator {
         }
       }
       for (const reservation of attempt.execution?.reservations || []) await releaseExecution(this.root, reservation);
+      if (attempt.nativeReservation) await releaseExecution(this.root, attempt.nativeReservation);
       await this._update(runId, taskId, attemptId, a => { a.runtimeReleasedAt = time(); a.executionCleanup = resources; a.telemetryCleanup = telemetryResources; delete a.runtimeCleanupError; });
     } catch (error) {
       await this._update(runId, taskId, attemptId, a => { a.runtimeCleanupError = serializeError(error); });
@@ -356,6 +540,7 @@ export class Orchestrator {
       await this._update(runId, taskId, attempt.id, a => {
         a.submissionAcknowledgedAt = time();
         a.status = a.cancelRequested ? 'cancelling' : 'running';
+        a.executionPhase = 'execute';
         delete a.lastError;
       });
     } catch (error) {
@@ -408,6 +593,7 @@ export class Orchestrator {
 
   async input(runId, taskId, { keys, text } = {}) {
     const { run, attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Host work is controlled by its conversation; there is no terminal to address.');
     invariant(!attempt.workerClosed && attempt.paneId, 'worker_not_running', 'No live worker to address.');
     invariant(!attempt.cancelRequested && !['submitted', 'verifying', 'accepted', 'integrated'].includes(attempt.status), 'input_not_allowed', 'Input is disabled after submission or cancellation.');
     await this._assertIdentity(run, attempt);
@@ -420,6 +606,7 @@ export class Orchestrator {
 
   async resume(runId, taskId) {
     const { run, attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Use host report, host verify, or host start --retry for host work.');
     invariant(!integrationHold(attempt), 'integration_recovery_required', 'Use recover to recheck the current checkout without applying the patch again.');
     invariant(attempt.status !== 'verifying' && !(attempt.status === 'cancelling' && attempt.operation?.kind === 'verification'), 'verification_in_progress', 'Verification owns this candidate. Inspect its process and evidence before recovery; resume never resubmits or reruns these checks.');
     if (!attempt.paneId && ['preparing', 'cancelling'].includes(attempt.status) && attempt.launcherHost === os.hostname() && !alive(attempt.launcherPid)) {
@@ -441,22 +628,41 @@ export class Orchestrator {
   }
 
   _validateResult(value, task, attempt) {
-    invariant(value && typeof value === 'object' && !Array.isArray(value), 'invalid_result', 'Result must be an object.');
-    invariant(value.taskId === task.id && value.attemptId === attempt.id && value.nonce === attempt.nonce, 'stale_result', 'Result does not match this task, attempt and nonce.');
-    invariant(['submitted', 'needs_input'].includes(value.status), 'invalid_result', 'Result status must be submitted or needs_input.');
-    invariant(typeof value.summary === 'string' && Array.isArray(value.changedFiles) && value.changedFiles.every(x => typeof x === 'string'), 'invalid_result', 'Result must contain summary and changedFiles.');
-    invariant(Array.isArray(value.checks) && Array.isArray(value.children) && Array.isArray(value.unresolved), 'invalid_result', 'Result must contain checks, children and unresolved arrays.');
-    const ids = new Set();
-    for (const child of value.children) {
-      invariant(child && typeof child.id === 'string' && !ids.has(child.id) && ['completed', 'cancelled', 'running', 'unknown'].includes(child.status), 'invalid_result', 'Invalid or duplicate child record.');
-      ids.add(child.id);
-    }
-    invariant(value.children.length <= task.maxChildren, 'child_budget_exceeded', 'Reported children exceed the task budget. This budget is a reporting contract, not a sandbox.');
-    return value;
+    return validateResult(value, task, attempt);
+  }
+
+  async requestReport(runId, taskId) {
+    const { attempt: target } = await this._attempt(runId, taskId);
+    invariant(target.executorKind !== 'host', 'host_command_required', 'Host work reports through host report.');
+    return state.withLock(path.join(state.runPath(this.root, runId), `verify-${taskId}.lock`), async () => {
+      const { run, task, attempt } = await this._attempt(runId, taskId);
+      if (attempt.reportRequest) return { ...(await this.inspect(runId, taskId)), duplicate: true };
+      invariant(attempt.status === 'needs_input' && ['missing_result', 'invalid_result', 'state_invalid_json'].includes(attempt.lastError?.code), 'report_request_not_allowed', 'Only a missing or malformed report can be requested automatically.');
+      invariant(!attempt.report?.children?.some(child => !['completed', 'cancelled'].includes(child.status)), 'children_unfinished', 'Resolve native children before requesting a report.');
+      await this._cancelCheck(runId, taskId);
+      const live = await this._assertIdentity(run, attempt);
+      invariant(live.interactive_ready && ['idle', 'done'].includes(live.agent_status), 'agent_not_ready', 'Report request requires an idle, identified worker.');
+      // Persist intent before delivery. A lost acknowledgment must never cause a second prompt.
+      await this._update(runId, taskId, attempt.id, a => {
+        invariant(!a.reportRequest && !a.cancelRequested && a.status === 'needs_input', 'report_request_not_allowed', 'Attempt changed before report request.');
+        a.reportRequest = { startedAt: time(), acknowledgedAt: null, state: 'sending' };
+      });
+      try {
+        await this.herdr.prompt(run.herdrSession, attempt.workerName, `Report the current attempt only; do not repeat the implementation or start new work. Read ${JSON.stringify(path.join(attempt.directory, 'prompt.txt'))} for its result contract. Write the current result atomically to ${JSON.stringify(attempt.resultFile)} with taskId ${JSON.stringify(task.definition.id)}, attemptId ${JSON.stringify(attempt.id)}, and nonce ${JSON.stringify(attempt.nonce)}. Include blockers and all actual children; never invent checks or claim acceptance.`, 0);
+        await this._update(runId, taskId, attempt.id, a => {
+          a.reportRequest.acknowledgedAt = time(); a.reportRequest.state = 'acknowledged';
+          if (!a.cancelRequested && a.status === 'needs_input') { a.status = 'running'; delete a.lastError; }
+        });
+      } catch (error) {
+        await this._update(runId, taskId, attempt.id, a => { a.reportRequest.state = 'uncertain'; a.lastError = serializeError(error); if (!a.cancelRequested) a.status = 'uncertain'; });
+      }
+      return { ...(await this.inspect(runId, taskId)), requested: true };
+    });
   }
 
   async collect(runId, taskId, { waitMs = 0 } = {}) {
-    await this._attempt(runId, taskId);
+    const { attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Host work submits via host report, not terminal collection.');
     return state.withLock(path.join(state.runPath(this.root, runId), `verify-${taskId}.lock`), () => this._collect(runId, taskId, { waitMs }));
   }
 
@@ -474,6 +680,7 @@ export class Orchestrator {
         await this._update(runId, taskId, attempt.id, a => { if (!a.cancelRequested) a.status = missing(error) ? 'interrupted' : 'uncertain'; a.lastError = serializeError(error); });
         return this.inspect(runId, taskId);
       }
+      await this._update(runId, taskId, attempt.id, a => { a.observedAt = time(); a.lastObservedState = live.agent_status || 'unknown'; });
       if (live.agent_status === 'blocked') {
         await this._update(runId, taskId, attempt.id, a => { if (!a.cancelRequested) a.status = 'needs_input'; a.lastObservedState = 'blocked'; });
         return this.inspect(runId, taskId, { output: true });
@@ -487,16 +694,22 @@ export class Orchestrator {
           invariant(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 131072, 'invalid_result', 'Result must be a regular file of at most 128 KiB.');
           const report = this._validateResult(await state.readJson(attempt.resultFile), task.definition, attempt);
           const childrenComplete = report.children.every(c => ['completed', 'cancelled'].includes(c.status));
+          const nativeChildren = await this._nativeChildren(runId, task.definition, attempt, report);
           const snap = await git.snapshot(attempt.cwd);
           const changed = git.changedPaths(attempt.baseline, snap);
           const unexpected = outsideScope(changed, task.definition.allowedPaths);
-          const resultState = report.status === 'needs_input' || !childrenComplete || report.unresolved.length || unexpected.length ? 'needs_input' : 'submitted';
+          const resultState = report.status === 'needs_input' || !childrenComplete || !nativeChildren.complete || report.unresolved.length || unexpected.length ? 'needs_input' : 'submitted';
           const output = await this.herdr.readAgent(run.herdrSession, attempt.workerName);
           await fs.writeFile(path.join(attempt.directory, 'terminal.txt'), output, { mode: 0o600 });
           await this._update(runId, taskId, attempt.id, a => {
             a.report = report; a.collectedAt = time(); a.snapshot = snap; a.changedPaths = changed;
+            a.nativeChildren = nativeChildren;
             a.outsideScope = unexpected; if (!a.cancelRequested) a.status = resultState;
-            delete a.lastError;
+            if (unexpected.length) a.lastError = { code: 'scope_violation', message: 'Reported candidate changed paths outside task scope.' };
+            else if (!childrenComplete || !nativeChildren.complete) a.lastError = { code: 'children_unfinished', message: 'Native children are still running or unknown.' };
+            else if (report.unresolved.length || report.status === 'needs_input') a.lastError = { code: 'worker_blocked', message: 'Worker reported unresolved work; inspect the report.' };
+            else delete a.lastError;
+            delete a.executionPhase;
           });
           return this.inspect(runId, taskId);
         } catch (error) {
@@ -537,17 +750,32 @@ export class Orchestrator {
     catch (error) { if (error.code !== 'pane_not_found') throw error; }
   }
 
-  async verify(runId, taskId) {
+  async verify(runId, taskId, { recovery = false, hostThread = null } = {}) {
     await this._attempt(runId, taskId);
     return state.withLock(path.join(state.runPath(this.root, runId), `verify-${taskId}.lock`), async () => {
       const { run, task, attempt } = await this._attempt(runId, taskId);
+      const isHost = attempt.executorKind === 'host';
+      if (isHost) {
+        assertHostOwner(this, attempt, hostThread);
+        invariant(attempt.hostStoppedEvidence, 'host_not_stopped', 'The host must report that all editing has stopped.');
+      }
+      if (!isHost) {
+        const children = await this._nativeChildren(runId, task.definition, attempt, attempt.report);
+        await this._update(runId, taskId, attempt.id, a => { a.nativeChildren = children; });
+        invariant(children.complete, 'native_children_unverified', 'Native children must be resolved before verification.');
+      }
       invariant(['submitted', 'accepted'].includes(attempt.status), 'not_submitted', 'Collect a valid submitted result before verification.');
       invariant(!attempt.outsideScope?.length, 'scope_violation', 'Worker changed files outside its allowed paths.');
       invariant((await git.snapshot(attempt.cwd)).hash === attempt.snapshot.hash, 'candidate_changed', 'Candidate changed since collection; recollect or retry.');
-      if (attempt.status === 'accepted') return this.inspect(runId, taskId);
-      await this._closeWorker(run, attempt);
-      await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
+      if (attempt.status === 'accepted') {
+        await this._recordTaskReadiness(runId, taskId);
+        return this.inspect(runId, taskId);
+      }
+      if (!isHost) {
+        await this._closeWorker(run, attempt);
+        await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
       await this._releaseRuntime(runId, taskId, attempt.id);
+      }
       await this._update(runId, taskId, attempt.id, a => { invariant(!a.cancelRequested, 'cancel_requested', 'Verification was cancelled.'); a.status = 'verifying'; a.operation = { kind: 'verification', pid: process.pid, host: os.hostname(), finishedAt: null }; });
       const checks = [];
       let validationError;
@@ -557,12 +785,12 @@ export class Orchestrator {
           const check = task.definition.checks[i];
           let outcome;
           const startedAt = time();
-          try { outcome = await this._checkCommand(runId, taskId, check, attempt.cwd); }
+          try { outcome = await this._checkCommand(runId, taskId, check, attempt.cwd, { ignoreDeadline: recovery }); }
           catch (error) { outcome = { code: null, stdout: '', stderr: error.message, error: serializeError(error) }; }
           const evidence = path.join(attempt.directory, `check-${i + 1}.json`);
           await state.writeJsonAtomic(evidence, { ...check, ...outcome, startedAt, finishedAt: time() });
           checks.push({ name: check.name, argv: check.argv, status: outcome.code === 0 ? 'passed' : 'failed', code: outcome.code, evidence, error: outcome.error || null });
-          await this._cancelCheck(runId, taskId);
+          await this._cancelCheck(runId, taskId, { ignoreDeadline: recovery });
         }
         invariant((await git.snapshot(attempt.cwd)).hash === attempt.snapshot.hash, 'verification_mutated_tree', 'Verification changed source files or the candidate changed concurrently.');
         if (checks.every(c => c.status === 'passed') && task.definition.isolation === 'worktree') await git.makePatch(attempt.cwd, path.join(attempt.directory, 'candidate.patch'), attempt.baselineTree || 'HEAD');
@@ -576,18 +804,26 @@ export class Orchestrator {
         a.operation.finishedAt = time();
         if (passed && task.definition.isolation === 'worktree') a.patchFile = path.join(attempt.directory, 'candidate.patch');
       });
+      if (passed) await this._recordTaskReadiness(runId, taskId);
       return this.inspect(runId, taskId);
     });
   }
 
-  async _checkCommand(runId, taskId, check, cwd) {
-    await this._cancelCheck(runId, taskId);
+  async _checkCommand(runId, taskId, check, cwd, { ignoreDeadline = false } = {}) {
+    await this._cancelCheck(runId, taskId, { ignoreDeadline });
     const controller = new AbortController();
     let reading = false;
     const timer = setInterval(async () => {
       if (reading) return;
       reading = true;
-      try { const { attempt } = await this._attempt(runId, taskId); if (attempt.cancelRequested) controller.abort(); }
+      try {
+        const { attempt } = await this._attempt(runId, taskId);
+        if (attempt.cancelRequested) controller.abort();
+        else if (!ignoreDeadline && attempt.deadlineAt && Date.parse(attempt.deadlineAt) <= Date.now()) {
+          controller.abort();
+          await this._update(runId, taskId, attempt.id, a => { a.deadlineExceededAt ||= time(); });
+        }
+      }
       catch { controller.abort(); }
       finally { reading = false; }
     }, 100);
@@ -597,6 +833,7 @@ export class Orchestrator {
 
   async retry(runId, taskId, feedback = '') {
     const { run, task, attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Use host start --retry to continue host implementation.');
     invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(attempt.status), 'attempt_active', 'Verify or cancel before retrying.');
     if (attempt.paneId && !attempt.workerClosed) {
       await this._closeWorker(run, attempt);
@@ -615,14 +852,19 @@ export class Orchestrator {
     return this.inspect(runId, taskId);
   }
 
-  async cancel(runId, taskId) {
+  async cancel(runId, taskId, { reason = 'user' } = {}) {
+    invariant(['user', 'deadline'].includes(reason), 'invalid_cancel_reason', 'Cancellation reason must be user or deadline.');
     const { run, attempt } = await this._attempt(runId, taskId);
     if (['integration_failed', 'integration_cancelled'].includes(attempt.status)) return this.inspect(runId, taskId);
     if (['cancelled', 'accepted', 'integrated'].includes(attempt.status)) {
       if (attempt.workerClosed) await this._releaseRuntime(runId, taskId, attempt.id);
       return this.inspect(runId, taskId);
     }
-    await this._update(runId, taskId, attempt.id, a => { a.cancelRequested = true; a.status = 'cancelling'; });
+    await this._update(runId, taskId, attempt.id, a => {
+      a.cancelRequested = true; a.status = 'cancelling'; a.cancelReason ||= reason;
+      if (reason === 'deadline') a.deadlineExceededAt ||= time();
+    });
+    if (attempt.executorKind === 'host') return this.inspect(runId, taskId);
     if (['verifying', 'integrating'].includes(attempt.status)) return this.inspect(runId, taskId);
     try {
       await this._closeWorker(run, attempt);
@@ -654,6 +896,7 @@ export class Orchestrator {
         invariant(!Object.values(other.tasks || {}).some(t => integrationHold(current(t))), 'integration_recovery_required', 'Recover the incomplete integration before applying another patch.');
         invariant(!Object.values(other.tasks || {}).some(checkoutHold), 'checkout_busy', 'A checkout task still owns unverified project changes.');
       }
+      await this._cancelCheck(runId, taskId);
       await this._update(runId, taskId, attempt.id, a => { a.status = 'integrating'; a.integrationStartedAt = time(); a.integrationBaseline = target; a.operation = { kind: 'integration', pid: process.pid, host: os.hostname(), finishedAt: null }; });
       try { await git.applyPatch(run.project, attempt.patchFile); }
       catch (error) {
@@ -664,12 +907,12 @@ export class Orchestrator {
     });
   }
 
-  async _verifyIntegration(run, task, attempt) {
+  async _verifyIntegration(run, task, attempt, { recovery = false } = {}) {
     const before = await git.snapshot(run.project);
     const checks = [];
     for (const check of task.definition.checks) {
       try {
-        const result = await this._checkCommand(run.id, task.definition.id, check, run.project);
+        const result = await this._checkCommand(run.id, task.definition.id, check, run.project, { ignoreDeadline: recovery });
         checks.push({ name: check.name, status: result.code === 0 ? 'passed' : 'failed', ...result });
       } catch (error) { checks.push({ name: check.name, status: 'failed', error: serializeError(error) }); }
     }
@@ -685,19 +928,20 @@ export class Orchestrator {
     return this.inspect(run.id, task.definition.id);
   }
 
-  async recover(runId, taskId) {
+  async recover(runId, taskId, { hostThread = null } = {}) {
     const { run } = await this._attempt(runId, taskId);
     const key = crypto.createHash('sha256').update(run.project).digest('hex');
     return state.withLock(path.join(this.root, 'locks', `project-${key}`), async () => {
       const { task, attempt } = await this._attempt(runId, taskId);
+      if (attempt.executorKind === 'host') assertHostOwner(this, attempt, hostThread);
       if (task.definition.isolation === 'checkout') {
-        invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(attempt.status) && attempt.workerClosed, 'not_recoverable', 'Stop the failed checkout worker before rechecking the project.');
+        invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(attempt.status) && stopped(attempt), 'not_recoverable', 'Stop the failed checkout worker before rechecking the project.');
         invariant(attempt.baseline?.files, 'recovery_evidence_missing', 'Checkout baseline is missing.');
         const candidate = await git.snapshot(run.project);
         const changed = git.changedPaths(attempt.baseline, candidate);
         invariant(!outsideScope(changed, task.definition.allowedPaths).length, 'scope_violation', 'Checkout contains changes outside the task scope.');
         await this._update(runId, taskId, attempt.id, a => { a.snapshot = candidate; a.changedPaths = changed; a.outsideScope = []; a.cancelRequested = false; a.status = 'submitted'; });
-        return this.verify(runId, taskId);
+        return this.verify(runId, taskId, { recovery: true, hostThread });
       }
       invariant(integrationHold(attempt), 'not_recoverable', 'recover rechecks incomplete integrations only. It never replays a worker or applies a patch.');
       invariant(attempt.operation?.finishedAt || (attempt.operation?.host === os.hostname() && !alive(attempt.operation.pid)), 'operation_alive', 'The original integration controller may still be running.');
@@ -708,7 +952,7 @@ export class Orchestrator {
         a.cancelRequested = false; a.status = 'integrating';
         a.operation = { kind: 'integration', pid: process.pid, host: os.hostname(), finishedAt: null };
       });
-      return this._verifyIntegration(run, task, attempt);
+      return this._verifyIntegration(run, task, attempt, { recovery: true });
     });
   }
 
@@ -722,8 +966,11 @@ export class Orchestrator {
       const attempt = current(task);
       if (attempt.workerClosed) await this._releaseRuntime(runId, task.definition.id, attempt.id);
     }
-    await this.herdr.stopServer(run.herdrSession);
-    await this._change(runId, r => { r.serverStoppedAt = time(); });
-    return { runId, serverStopped: true, retained: 'Worktrees, task records and evidence are retained. No project files were removed.' };
+    const hasRuntime = Boolean(Object.values(run.tasks).some(t => t.attempts.some(a => a.executorKind !== 'host')) || run.server);
+    if (hasRuntime) {
+      await this.herdr.stopServer(run.herdrSession);
+      await this._change(runId, r => { r.serverStoppedAt = time(); });
+    }
+    return { runId, serverStopped: hasRuntime, retained: 'Worktrees, task records and evidence are retained. No project files were removed.' };
   }
 }

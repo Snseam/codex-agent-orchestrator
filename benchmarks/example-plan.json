@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "cao-adaptive-pilot-example",
+  "deadlineMs": 3600000,
+  "cohorts": [
+    {
+      "id": "existing-repo",
+      "tasks": [
+        { "id": "small-bugfix" },
+        { "id": "cross-module-feature" }
+      ]
+    }
+  ],
+  "arms": [
+    { "id": "direct-codex", "label": "Direct Codex baseline" },
+    { "id": "adaptive-cao", "label": "CAO adaptive dispatch" }
+  ],
+  "repetitions": [1, 2, 3]
+}

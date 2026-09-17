@@ -1,3 +1,6 @@
+import { fileURLToPath } from 'node:url';
+import { renderBrief } from './task-brief.mjs';
+
 export const capabilities = {
   claude: {
     herdrKind: 'claude',
@@ -72,6 +75,7 @@ export function compilePrompt(task, attempt) {
 
 Task:
 ${task.objective}
+${task.brief ? `\n${renderBrief(task.brief)}\n` : ''}
 
 Task metadata:
 - taskId: ${task.id}
@@ -100,11 +104,13 @@ Child/inner-agent reporting:
 - You may use native child/subagent/team mechanisms only if this agent installation actually supports them and the needed tools are enabled.
 - If max native children requested/reported is 0, do not start child/subagent/team work; complete the task in this session.
 - Do not claim inner delegation occurred unless it actually did.
+- For Claude Code, use the native agent id from SubagentStart/SubagentStop evidence in children[].id. A parent stop or idle state does not establish that children stopped; telemetry may block acceptance even if a child is omitted from this report.
 - Track every child you start in the final result JSON as {id,status}. Valid child statuses are "completed", "cancelled", "running", and "unknown".
 - The orchestrator does not treat your terminal idle state as proof that children completed; report unresolved child work explicitly.
 
 Result contract:
 - Write the result file last, after edits and checks.
+- Prefer the atomic submission helper with the result JSON on stdin. Its argv is ${JSON.stringify([process.execPath, fileURLToPath(new URL('../bin/cao.mjs', import.meta.url)), 'result', 'submit', '--attempt-dir', attempt.directory, '--stdin'])}. It validates your report; it does not accept the task or run checks for you. Direct result-file writing remains supported.
 - The result file must contain one JSON object with this shape:
 ${JSON.stringify(skeleton, null, 2)}
 - status must be "submitted" when you have delivered work for verification, or "needs_input" when blocked on user/controller input.

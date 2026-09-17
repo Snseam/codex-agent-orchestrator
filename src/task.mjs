@@ -3,6 +3,7 @@ import path from 'node:path';
 import { OrchestratorError } from './errors.mjs';
 import { validateId } from './state.mjs';
 import { validateExecution } from './routing.mjs';
+import { validateBrief } from './task-brief.mjs';
 
 const KNOWN_KEYS = new Set([
   'id',
@@ -18,6 +19,8 @@ const KNOWN_KEYS = new Set([
   'maxAttempts',
   'dependsOn',
   'execution',
+  'deadlineAt',
+  'brief',
 ]);
 
 const AGENTS = new Set(['claude', 'pi', 'opencode', 'codex', 'auto']);
@@ -180,6 +183,7 @@ export function validateTask(object) {
   if (!AGENTS.has(agent)) {
     throw taskError('invalid_task', 'agent must be claude, pi, opencode, codex, or auto', { agent });
   }
+  if (execution?.native && agent === 'auto') throw taskError('invalid_task', 'Native execution requires a concrete agent.');
 
   const role = object.role === undefined ? 'implementer' : requireString(object.role, 'role', { nonempty: true });
   const allowedPaths = normalizeAllowedPaths(object.allowedPaths);
@@ -194,6 +198,17 @@ export function validateTask(object) {
   const nativeInstructions = requireString(object.nativeInstructions ?? '', 'nativeInstructions');
   const maxChildren = normalizeNonnegativeInteger(object.maxChildren ?? 0, 'maxChildren');
   const maxAttempts = normalizePositiveInteger(object.maxAttempts ?? 3, 'maxAttempts', 20);
+  let deadlineAt;
+  if (object.deadlineAt !== undefined) {
+    if (typeof object.deadlineAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(object.deadlineAt) || !Number.isFinite(Date.parse(object.deadlineAt))) {
+      throw taskError('invalid_task', 'deadlineAt must be an ISO UTC timestamp', { field: 'deadlineAt' });
+    }
+    deadlineAt = new Date(object.deadlineAt).toISOString();
+    const canonicalInput = object.deadlineAt.length === 20 ? object.deadlineAt.replace('Z', '.000Z') : object.deadlineAt;
+    if (deadlineAt !== canonicalInput) {
+      throw taskError('invalid_task', 'deadlineAt must be a real calendar timestamp', { field: 'deadlineAt' });
+    }
+  }
   const dependsOn = normalizeUniqueSorted(normalizeStringArray(object.dependsOn ?? [], 'dependsOn', { safeIds: true }));
   if (dependsOn.includes(id)) {
     throw taskError('invalid_task', 'dependsOn must not include the task id', { id });
@@ -213,6 +228,8 @@ export function validateTask(object) {
     maxAttempts,
     dependsOn,
     ...(execution ? { execution } : {}),
+    ...(deadlineAt ? { deadlineAt } : {}),
+    ...(object.brief === undefined ? {} : { brief: validateBrief(object.brief) }),
   };
 }
 

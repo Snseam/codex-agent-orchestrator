@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "experimentId": "cao-adaptive-pilot-example",
+  "trials": [
+    {
+      "cohortId": "existing-repo",
+      "taskId": "small-bugfix",
+      "armId": "direct-codex",
+      "repetition": 1,
+      "outcome": "accepted",
+      "projectAcceptance": true,
+      "durationMs": 900000
+    },
+    {
+      "cohortId": "existing-repo",
+      "taskId": "small-bugfix",
+      "armId": "adaptive-cao",
+      "repetition": 1,
+      "outcome": "accepted",
+      "projectAcceptance": true,
+      "durationMs": 780000
+    },
+    {
+      "cohortId": "existing-repo",
+      "taskId": "small-bugfix",
+      "armId": "direct-codex",
+      "repetition": 2,
+      "outcome": "failed",
+      "durationMs": 3600000
+    },
+    {
+      "cohortId": "existing-repo",
+      "taskId": "small-bugfix",
+      "armId": "adaptive-cao",
+      "repetition": 2,
+      "outcome": "timeout",
+      "durationMs": 3600001
+    },
+    {
+      "cohortId": "existing-repo",
+      "taskId": "small-bugfix",
+      "armId": "direct-codex",
+      "repetition": 3,
+      "outcome": "cancelled",
+      "cancelledBy": "user",
+      "durationMs": 120000
+    },
+    {
+      "cohortId": "existing-repo",
+      "taskId": "small-bugfix",
+      "armId": "adaptive-cao",
+      "repetition": 3,
+      "outcome": "accepted",
+      "projectAcceptance": true,
+      "durationMs": 820000
+    }
+  ]
+}

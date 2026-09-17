@@ -21,6 +21,20 @@ export function publicTokenUsage(value) {
   };
 }
 
+function publicTiming(value) {
+  if (!value || typeof value !== 'object') return null;
+  const phases = ['prepare', 'launch', 'execute', 'collect', 'verify', 'integrate'];
+  return {
+    phase: [...phases, 'blocked', 'finished', 'unknown'].includes(value.phase) ? value.phase : 'unknown',
+    durationsMs: Object.fromEntries(phases.map(phase => [phase, counter(value.durationsMs?.[phase])])),
+    blockedMs: counter(value.blockedMs),
+    lastProgressAt: date(value.lastProgressAt),
+    lastObservedAt: date(value.lastObservedAt),
+    blockerCategory: cleanText(value.blocker?.category ?? value.blockerCategory, 40),
+    legacyPrehistory: value.coverage?.hasLegacyPrehistory === true || value.legacyPrehistory === true,
+  };
+}
+
 // This is the only shape allowed to cross the browser boundary. Do not spread source records.
 export function publicNode(node, observedAt) {
   node = node && typeof node === 'object' ? node : {};
@@ -28,6 +42,9 @@ export function publicNode(node, observedAt) {
   return {
     id: cleanText(node.id, 256), parentId: cleanText(node.parentId, 256),
     agent: agents.has(node.agent) ? node.agent : 'unknown',
+    executorKind: ['host', 'external'].includes(node.executorKind) ? node.executorKind : null,
+    route: node.route?.mode === 'adaptive' ? { mode: 'adaptive', resourceId: cleanText(node.route.resourceId, 160), preference: cleanText(node.route.preference, 40), reasons: (Array.isArray(node.route.reasons) ? node.route.reasons : []).slice(0, 12).map(reason => cleanText(reason, 160)) } : null,
+    nativeChildren: node.nativeChildren ? { state: ['verified', 'reported', 'unknown', 'blocked'].includes(node.nativeChildren.state) ? node.nativeChildren.state : 'unknown', complete: node.nativeChildren.complete === true, source: cleanText(node.nativeChildren.source, 80), count: Array.isArray(node.nativeChildren.children) ? node.nativeChildren.children.length : counter(node.nativeChildren.count) } : null,
     kind: ['coordinator', 'agent', 'subagent'].includes(node.kind) ? node.kind : 'agent',
     label: cleanText(node.label) || 'Agent', role: cleanText(node.role, 80), model: cleanText(node.model, 120),
     conversationTitle: cleanText(node.conversationTitle, 120),
@@ -41,6 +58,7 @@ export function publicNode(node, observedAt) {
     confidence: ['live', 'observed', 'reported', 'unknown'].includes(node.confidence) ? node.confidence : 'unknown',
     relation: ['native', 'cao', 'workspace', 'unlinked'].includes(node.relation) ? node.relation : 'unlinked',
     tokens: tokenUsage?.total ?? counter(node.tokens), tokenUsage,
+    performance: publicTiming(node.performance),
   };
 }
 

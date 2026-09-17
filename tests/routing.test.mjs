@@ -79,6 +79,9 @@ test('validateExecution rejects ambiguous selectors and defaults shared routing 
   assert.throws(() => validateExecution({ profile: 'p1', policy: 'quality' }), error => error.code === 'invalid_execution');
   assert.throws(() => validateExecution({ policy: 'speed' }), error => error.code === 'invalid_execution');
   assert.throws(() => validateExecution({ profiles: ['p1'], nope: true }), error => error.code === 'invalid_execution');
+  assert.deepEqual(validateExecution({ native: true }), { native: true });
+  assert.throws(() => validateExecution({ native: true, profile: 'p1' }), error => error.code === 'invalid_execution');
+  assert.throws(() => validateExecution({ native: false }), error => error.code === 'invalid_execution');
 });
 
 test('explainRoute filters protocol, capabilities, shared sources, fresh source and quota failures', async t => {

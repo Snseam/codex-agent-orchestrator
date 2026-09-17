@@ -36,7 +36,7 @@ function commandEnv(env) {
   return next;
 }
 
-export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes = 1048576, signal } = {}) {
+export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes = 1048576, signal, onStdout } = {}) {
   validateArgv(argv);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 0) {
     throw new OrchestratorError('invalid_timeout', 'timeoutMs must be a non-negative integer', { timeoutMs });
@@ -53,6 +53,7 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
       cwd,
     });
   }
+  if (onStdout !== undefined && typeof onStdout !== 'function') throw new OrchestratorError('invalid_observer', 'onStdout must be a function.');
 
   const stdout = { chunks: [], size: 0, truncated: false };
   const stderr = { chunks: [], size: 0, truncated: false };
@@ -77,6 +78,7 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
     let settled = false;
     let termination;
     let spawnError;
+    let observerFailed = false;
     let killTimer;
     let killEscalated = false;
     let pendingTerminationClose = null;
@@ -119,7 +121,7 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
         return;
       }
       if (termination === 'cancelled') {
-        finish(reject, new OrchestratorError('command_cancelled', 'command was cancelled', {
+        finish(reject, new OrchestratorError(observerFailed ? 'command_observer_failed' : 'command_cancelled', observerFailed ? 'Command output observer failed.' : 'command was cancelled', {
           argv,
           cwd,
           signal: closeSignal,
@@ -150,7 +152,13 @@ export async function runCommand(argv, { cwd, env, timeoutMs = 30000, maxBytes =
     signal?.addEventListener?.('abort', onAbort, { once: true });
     if (signal?.aborted) onAbort();
 
-    child.stdout.on('data', (chunk) => appendBounded(stdout, chunk, maxBytes));
+    child.stdout.on('data', (chunk) => {
+      appendBounded(stdout, chunk, maxBytes);
+      if (onStdout && !observerFailed && !termination) {
+        try { onStdout(chunk); }
+        catch { observerFailed = true; terminate('cancelled'); }
+      }
+    });
     child.stderr.on('data', (chunk) => appendBounded(stderr, chunk, maxBytes));
     child.on('error', (error) => {
       spawnError = error;

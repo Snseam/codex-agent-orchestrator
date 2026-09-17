@@ -6,6 +6,27 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Opt-in, budgeted on-demand quick calibration for adaptive task dispatch, with saved conversation preferences, selector-aware candidate filtering, cache reuse and no probes during activation or when an eligible executor is already available.
+- Configuration-bound readiness from independently verified external task deliveries, allowing a normally delegated native login session to establish evidence for later adaptive selection without exporting OAuth credentials. Host work, mock runtime evidence and ambiguous legacy overrides are excluded.
+
+- Offline paired benchmark evaluation with predeclared experiment identities, separate existing-repository/greenfield cohorts, failure and missing-result denominators, cancellation sensitivity, and all-trial time-to-acceptance percentiles. Example data is synthetic; default adaptive rollout remains disabled.
+- Monitor details for executor, adaptive resource/reasons, phase and blocked durations, and native-child evidence, with compact activity rows and preserved unknown values.
+- Live isolated adaptive validation for Pi/Kimi and Claude/Grok, including an actual Claude Explore child, independent verification, integration and owned-runtime cleanup. This proves those tested paths, not a speedup over direct Codex.
+
+- Opt-in adaptive dispatch (`dispatch --adaptive` or `mode enable --strategy adaptive`) that binds one eligible resource to an attempt, pins retries to that binding, and treats unfinished or unknown native children as blockers. Preference ranking uses completion rate before elapsed time; it is not a live-agent speed or quality guarantee.
+- Optional bounded task briefs and unapplied `route shadow` recommendations with versioned per-conversation preferences. Existing dispatch defaults remain delegated.
+- Current-Codex `host start/report/verify/release/recover` workflow with checkout ownership, explicit stopped reports, bounded retries and independent in-place verification; cancellation does not pretend to stop the App turn.
+- English/Chinese host and shadow-routing guides, updated CAO skill guidance, and host/external executor metadata in monitor snapshots.
+
+- Native/managed `resources list/check`, including NVM installations, distinct Pi provider/model candidates, configuration fingerprints, quota freshness and cached call-verification evidence.
+- Explicit isolated Claude/Pi `calibrate` quick/code suites, bounded model calls, private temporary configuration, independent code checks and real/mock-aware evidence caching. These probes are not production harness or overall quality benchmarks.
+- CC Switch schema-18 Pi API-provider discovery and reference import, explicit Pi model metadata, and labelled unknown price/compatibility metadata.
+
+- Foreground `step` / `supervise` commands to reconcile existing tasks and advance independent verification, with explicit integration and one-shot report-repair options, per-run controller ownership, deadline checks, and attention on unresolved work.
+- Read-only task `preflight`, optional absolute `deadlineAt`, and atomic `result submit` with identity/size checks. Expired retained edits can still be explicitly rechecked through recovery without restarting implementation.
+- `performance report` with observed phase/blocked durations, outcome and legacy-data coverage, sequenced post-commit observation events, and sanitized timing metadata in monitor snapshots. These are execution observations, not model inference benchmarks or speedup claims.
+- English and Chinese supervision guides and regression coverage for acknowledgement loss, controller concurrency, deadline/recovery behavior, and end-to-end CLI verification/integration.
+
 - Installable **CAO** Codex skill, a copyable README installation request, and `skill install/status/uninstall` commands with linked-checkout updates and conflict protection.
 - Per-conversation `mode enable/status/disable` preferences for continuing CAO development across turns, with independent project/agent/profile/limit settings and recovery notes. Desktop activation uses the `/CAO` skill suggestion; CLI supports `$cao` and `/skills`.
 - `usage` queries local Claude Code, Codex CLI, Pi, and OpenCode token records through optional Tokscale tooling (`>=4.16.0 <5`).
@@ -25,6 +46,11 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 - Per-agent token metadata in monitor snapshots (`nodes.tokens` / `tokenUsage`) with session/turn/observed scope, source, completeness, and partial/scanned-window handling. These observations are not provider billing, subscription balance, or exact CAO task cost.
 
 ### Fixed
+
+- Restore the preflight-discovered agent directory inside every owned Herdr pane, including PATH discoveries, so login-shell PATH changes do not silently start older agents or Node runtimes.
+- Resolve state-root aliases before resuming attempts, preventing macOS `/var` aliases from breaking telemetry identity checks and cleanup.
+- Release adaptive Claude capacity when startup is cancelled after the worker closes but before an assignment is sent; submitted or still-unknown child work continues to hold capacity.
+- Preserve child counts and timing evidence when the monitor sanitizes a snapshot twice, and distinguish bound adaptive attempts from unapplied shadow advice in recorded route reasons.
 
 - Isolate mock Claude profile smoke runs from user configuration and session history, preventing synthetic `alpha` / `beta` models from appearing in normal model pickers and token reports. Explicit Claude config directories now reach the actual worker bootstrap as well as recorded log roots.
 - Preserve command cancellation escalation after a leader exits, so TERM-resistant descendants are killed before cancellation settles.

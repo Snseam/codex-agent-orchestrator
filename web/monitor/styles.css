@@ -563,6 +563,9 @@ tbody tr.is-context .agent-label {
 .agent-meta {
   color: var(--muted);
   font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .badge {

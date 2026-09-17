@@ -101,6 +101,8 @@ dispatch → collect → verify → integrate
 
 Each stage is an explicit CLI command. Task submission is not completion: `collect` requires an attempt-specific result, and `verify` runs checks independently of the agent's claims.
 
+For existing tasks, `supervise --run RUN_ID` advances collection and verification in a foreground loop. Add `--integrate` to permit patch integration and `--repair-reports` to permit one report-only repair per attempt. `performance report --run RUN_ID` shows observed phase durations and outcome coverage. See [supervision and performance](docs/supervision.md) for deadlines and recovery limits.
+
 ## Quick start
 
 ### 1. Prerequisites
@@ -191,6 +193,14 @@ By default, commands return JSON, with errors on stderr; `--help` prints usage. 
 
 ## Execution profiles
 
+For adaptive routing, you can opt into bounded preparation when no eligible resource is ready:
+
+```bash
+node bin/cao.mjs mode enable --strategy adaptive --calibration-policy on-demand --probe-budget-ms 30000
+```
+
+This saves a conversation preference. Model probes run only during a later task dispatch that needs them; an already eligible host or external agent proceeds immediately. Independently verified native task deliveries can also supply readiness without copying OAuth credentials. See [adaptive dispatch](docs/adaptive-dispatch.md) for evidence and configuration limits.
+
 Execution profiles are optional. They let CAO select a native agent, model, upstream endpoint, credential reference, and routing policy per task while keeping global provider files unchanged. Profiles can be authored directly or imported from a read-only CC Switch database. Stored secrets are read from stdin or environment references; secret values are never stored in profile JSON.
 
 Useful commands:
@@ -237,11 +247,11 @@ To inspect the current conversation view with token columns, you can ask Codex:
 | Agent | Task value | Current validation |
 | --- | --- | --- |
 | Claude Code | `claude` | Local live workflow and controlled repair verified; profiled local relay verified with a simulated Anthropic API |
-| Pi | `pi` | Native CLI profile request verified against a mock API; complete Herdr workflow not yet verified |
+| Pi | `pi` | Isolated Kimi `k3` adaptive Herdr workflow verified through independent acceptance, integration and cleanup; other configurations remain unverified |
 | OpenCode | `opencode` | Launch and profiled runtime adapter implemented; live workflow not yet verified |
 | Codex CLI | `codex` | Native CLI profile request verified against a mock API; complete Herdr workflow not yet verified |
 
-`agentArgs` forwards CLI-specific options in inherited mode. Profiled tasks reject arguments that would conflict with profile-owned model, provider, session, config, or worktree settings; Codex allows selected reasoning and verbosity `-c` overrides. `nativeInstructions` describes how a worker should use its available native tools. `maxChildren` is a reporting contract, not a measured or enforced count of running subagents. See the [adapter architecture](docs/architecture.md) and [execution profiles](docs/execution-profiles.md).
+`agentArgs` forwards CLI-specific options in inherited mode. Profiled tasks reject arguments that would conflict with profile-owned model, provider, session, config, or worktree settings; Codex allows selected reasoning and verbosity `-c` overrides. `nativeInstructions` describes how a worker should use its available native tools. `maxChildren` is a reporting budget, not a hard runtime limit; adaptive Claude also checks available hook evidence before acceptance. See the [adapter architecture](docs/architecture.md), [execution profiles](docs/execution-profiles.md) and [live validation boundaries](docs/adaptive-validation.md).
 
 ## Token usage
 
@@ -284,6 +294,13 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 | [Execution profiles and routing](docs/execution-profiles.md) | Profile CRUD, secrets, CC Switch import, routing, gateway lifecycle |
 | [Local Agent Monitor](docs/monitor.md) | Read-only local dashboard for CAO, Codex, and Claude metadata |
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
+| [Supervision and performance](docs/supervision.md) | Foreground controller, preflight, report submission, deadlines and timing evidence |
+| [Resources and calibration](docs/resources.md) | Native/NVM discovery, CC Switch Pi profiles, isolated probes and cached evidence |
+| [Task briefs and shadow routing](docs/shadow-routing.md) | Advisory choices, conversation preferences and evidence limits |
+| [Opt-in adaptive dispatch](docs/adaptive-dispatch.md) | Actual resource selection, pinned attempts and native-child acceptance evidence |
+| [Paired benchmark evaluation](docs/benchmark-evaluation.md) | Predeclared trials, complete denominators, paired outcomes and rollout limits |
+| [Adaptive live validation](docs/adaptive-validation.md) | Tested Claude/Pi flows, isolation, observed failures and remaining coverage |
+| [Current-Codex host work](docs/host-work.md) | Register, report and independently verify in-place work without an external session |
 | [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
 | [CAO Codex skill](docs/codex-skill.md) | One-prompt installation, `/CAO` activation, conversation preferences, and updates |
 | [Changelog](CHANGELOG.md) | Release history |

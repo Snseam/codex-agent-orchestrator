@@ -4,6 +4,8 @@
 
 本文说明 CAO 的 run、task、attempt 状态和安全边界。实际状态以 `run.json` 为准。
 
+可选前台 `supervise` 命令推进同一组状态。任务 `deadlineAt`、一次报告补交、原子提交及阶段计时见[监督与性能记录](supervision.md)。它们不会将原生 idle 当作验收通过，也不会清除 checkout/integration hold。
+
 ## Run
 
 `init` 创建 run：记录项目 root、base commit、baseline snapshot、是否初始 dirty、最大并发和 CAO 专用 Herdr session。`status` 不带 `--run` 时列出所有 run。

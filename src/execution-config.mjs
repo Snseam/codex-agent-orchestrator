@@ -81,7 +81,9 @@ export async function prepareExecution({ task, attempt, profile, gateway, enviro
     const api = { anthropic: 'anthropic-messages', 'openai-responses': 'openai-responses', 'openai-chat': 'openai-completions' }[profile.protocol];
     const options = await saveJson('pi-provider.json', {
       name: providerName, baseUrl: endpoint + (profile.protocol === 'anthropic' ? '' : '/v1'), api, apiKey: token,
-      models: [{ id: profile.model, name: profile.model, reasoning: profile.capabilities.includes('reasoning'), input: profile.capabilities.includes('vision') ? ['text', 'image'] : ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 }],
+      // Pi requires numeric cost fields; these zeros are transport placeholders,
+      // never a measured price. The manifest records the unknown price source.
+      models: [{ id: profile.model, name: profile.model, reasoning: profile.capabilities.includes('reasoning'), input: profile.capabilities.includes('vision') ? ['text', 'image'] : ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: profile.modelMetadata?.contextWindow ?? 128000, maxTokens: profile.modelMetadata?.maxOutputTokens ?? 8192 }],
     });
     const extension = await save('pi-provider.mjs', `import fs from 'node:fs';\nexport default function(pi) { const {name, ...config} = JSON.parse(fs.readFileSync(${JSON.stringify(options)}, 'utf8')); pi.registerProvider(name, config); }\n`);
     launch.args.push('--extension', extension, '--provider', providerName, '--model', profile.model, '--session-id', nativeSessionId);
@@ -107,6 +109,11 @@ export async function prepareExecution({ task, attempt, profile, gateway, enviro
     readyMarker: `CAO_ENV_${markerNonce}`,
     bootstrap: `set +x; set +v; . ${shellQuote(envFile)} && printf '\\nCAO_ENV_%s\\n' ${shellQuote(markerNonce)}`,
     globalConfigMutation: false,
+    ...(profile.agent === 'pi' ? { modelMetadata: {
+      contextWindow: profile.modelMetadata?.contextWindow ?? 128000,
+      maxOutputTokens: profile.modelMetadata?.maxOutputTokens ?? 8192,
+      source: profile.modelMetadata ? 'profile-declared' : 'compatibility-default', priceSource: 'unknown',
+    } } : {}),
   };
   await writeJsonAtomic(path.join(privateDirectory, 'manifest.json'), manifest);
   return manifest;

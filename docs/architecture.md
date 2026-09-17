@@ -23,6 +23,8 @@ User / Codex App
 
 CAO owns only the runs, attempts, Herdr session, workspaces/panes, and evidence it creates. Agent accounts, models, provider configuration, native delegation features, and local permissions remain owned by the corresponding tool installation.
 
+The optional foreground supervisor drives those same stages for existing tasks. It holds a run-specific controller lock, returns on attention or its polling budget, and never installs a daemon. Post-commit performance projections and per-attempt timing are observational; `run.json` stays authoritative. See [supervision and performance](supervision.md).
+
 ## CLI layer: `bin/cao.mjs`
 
 The CLI parses arguments, reads task files, creates the `Orchestrator`, and prints JSON. Supported run stages are `init`, `validate`, `dispatch`, `status`, `inspect`, `collect`, `verify`, `retry`, `resume`, `input`, `integrate`, `recover`, `cancel`, `cleanup`, `doctor`, and `usage`. Profiled execution adds `source discover`, `profile ...`, `secret ...`, `route ...`, and `gateway ...` commands. Local monitoring adds `monitor start`, `monitor status`, `monitor stop`, and `monitor snapshot`.
@@ -55,7 +57,7 @@ The gateway is a same-protocol local relay for Anthropic, OpenAI Responses, or O
 
 `prepareExecution` writes per-attempt private native configuration and never mutates global provider files. Claude Code receives a generated settings file and session id; Codex CLI receives command-backed auth and `-c` provider overrides; Pi receives a provider extension; OpenCode receives inline config through `OPENCODE_CONFIG_CONTENT`. Profile-owned native arguments are rejected before launch.
 
-The CC Switch source adapter is read-only. The first implementation supports schema version 18 direct Claude API records in `settings_config.env` and explicit `allowShared` reuse of the active Claude proxy. OAuth-only and non-Claude client records are surfaced as unsupported or gateway-required, not imported as direct profiles.
+The CC Switch source adapter is read-only. It supports schema version 18 direct Claude API records in `settings_config.env`, explicit `allowShared` reuse of the active Claude proxy, and Pi API-provider records with literal keys and explicit model catalogs. OAuth-only and other unsupported client records are surfaced as unsupported or gateway-required. See [resources and calibration](resources.md) for native/NVM discovery and isolated probe boundaries.
 
 ## Orchestrator: `src/orchestrator.mjs`
 

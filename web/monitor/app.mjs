@@ -19,6 +19,11 @@ const CONFIDENCE = new Set(['live', 'observed', 'reported', 'unknown']);
 const RELATIONS = new Set(['native', 'cao', 'workspace', 'unlinked']);
 const SOURCE_STATES = new Set(['connected', 'partial', 'unavailable']);
 const TOKEN_SCOPES = new Set(['session', 'turn', 'observed']);
+const EXECUTOR_KINDS = new Set(['host', 'external']);
+const ROUTE_PREFERENCES = new Set(['fastest', 'quality', 'balanced', 'cost', 'subscription-first']);
+const NATIVE_CHILD_STATES = new Set(['verified', 'reported', 'unknown', 'blocked']);
+const TIMING_PHASES = ['prepare', 'launch', 'execute', 'collect', 'verify', 'integrate'];
+const TIMING_STATES = new Set([...TIMING_PHASES, 'blocked', 'finished', 'unknown']);
 
 const COPY = {
   en: {
@@ -118,6 +123,21 @@ const COPY = {
     fieldSource: 'Source',
     fieldConfidence: 'Confidence',
     fieldRelation: 'Relation',
+    fieldExecutor: 'Executor',
+    fieldRouteMode: 'Route',
+    fieldRouteResource: 'Selected resource',
+    fieldRoutePreference: 'Route preference',
+    fieldRouteReasons: 'Route reasons',
+    fieldPhase: 'Phase',
+    fieldPhaseDurations: 'Phase timing',
+    fieldBlocked: 'Blocked',
+    fieldBlocker: 'Blocker',
+    fieldLastProgress: 'Last progress',
+    fieldLastObserved: 'Last timing observation',
+    fieldLegacyPrehistory: 'Legacy prehistory',
+    fieldNativeChildren: 'Native children',
+    fieldNativeChildrenSource: 'Child evidence',
+    fieldNativeChildrenCount: 'Child count',
     fieldTokens: 'Tokens',
     fieldTokenScope: 'Token scope',
     fieldTokenSource: 'Token source',
@@ -132,6 +152,21 @@ const COPY = {
     tokenScopeSession: 'Session',
     tokenScopeTurn: 'Turn',
     tokenScopeObserved: 'Observed',
+    executorHost: 'Codex host',
+    executorExternal: 'External agent',
+    childVerified: 'Verified',
+    childReported: 'Reported',
+    childUnknown: 'Unknown',
+    childBlocked: 'Blocked',
+    phasePrepare: 'Prepare',
+    phaseLaunch: 'Launch',
+    phaseExecute: 'Execute',
+    phaseCollect: 'Collect',
+    phaseVerify: 'Verify',
+    phaseIntegrate: 'Integrate',
+    phaseBlocked: 'Blocked',
+    phaseFinished: 'Finished',
+    phaseUnknown: 'Unknown',
     yes: 'Yes',
     no: 'No',
     sourceConnected: 'Connected',
@@ -241,6 +276,21 @@ const COPY = {
     fieldSource: '来源',
     fieldConfidence: '置信',
     fieldRelation: '关系',
+    fieldExecutor: '执行器',
+    fieldRouteMode: '路由',
+    fieldRouteResource: '选中资源',
+    fieldRoutePreference: '路由偏好',
+    fieldRouteReasons: '路由原因',
+    fieldPhase: '阶段',
+    fieldPhaseDurations: '阶段耗时',
+    fieldBlocked: '阻塞时长',
+    fieldBlocker: '阻塞类型',
+    fieldLastProgress: '最近进展',
+    fieldLastObserved: '最近计时观察',
+    fieldLegacyPrehistory: '旧记录前史',
+    fieldNativeChildren: '本机子代理',
+    fieldNativeChildrenSource: '子代理证据',
+    fieldNativeChildrenCount: '子代理数量',
     fieldTokens: '令牌数',
     fieldTokenScope: '用量范围',
     fieldTokenSource: '用量来源',
@@ -255,6 +305,21 @@ const COPY = {
     tokenScopeSession: '会话',
     tokenScopeTurn: '回合',
     tokenScopeObserved: '观察',
+    executorHost: 'Codex 主控',
+    executorExternal: '外部代理',
+    childVerified: '已验证',
+    childReported: '已报告',
+    childUnknown: '未知',
+    childBlocked: '阻塞',
+    phasePrepare: '准备',
+    phaseLaunch: '启动',
+    phaseExecute: '执行',
+    phaseCollect: '收集',
+    phaseVerify: '验证',
+    phaseIntegrate: '集成',
+    phaseBlocked: '阻塞',
+    phaseFinished: '已结束',
+    phaseUnknown: '未知',
     yes: '是',
     no: '否',
     sourceConnected: '已连接',
@@ -344,6 +409,41 @@ function normalizeTokenUsage(raw) {
   };
 }
 
+function normalizeRoute(raw) {
+  if (!raw || typeof raw !== 'object' || raw.mode !== 'adaptive') return null;
+  return {
+    mode: 'adaptive',
+    resourceId: asText(raw.resourceId, 160),
+    preference: asEnum(raw.preference, ROUTE_PREFERENCES, asText(raw.preference, 40)),
+    reasons: Array.isArray(raw.reasons) ? raw.reasons.map(reason => asText(reason, 160)).filter(Boolean).slice(0, 12) : [],
+  };
+}
+
+function normalizeNativeChildren(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    state: asEnum(raw.state, NATIVE_CHILD_STATES, 'unknown'),
+    complete: raw.complete === true,
+    source: asText(raw.source, 80),
+    count: asTokens(raw.count),
+  };
+}
+
+function normalizePerformance(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const durationsMs = {};
+  for (const phase of TIMING_PHASES) durationsMs[phase] = asTokens(raw.durationsMs?.[phase]);
+  return {
+    phase: asEnum(raw.phase, TIMING_STATES, 'unknown'),
+    durationsMs,
+    blockedMs: asTokens(raw.blockedMs),
+    lastProgressAt: asIso(raw.lastProgressAt),
+    lastObservedAt: asIso(raw.lastObservedAt),
+    blockerCategory: asText(raw.blockerCategory, 40),
+    legacyPrehistory: raw.legacyPrehistory === true,
+  };
+}
+
 function tokenTotal(node) {
   const fromUsage = asTokens(node?.tokenUsage?.total);
   return fromUsage != null ? fromUsage : asTokens(node?.tokens);
@@ -365,6 +465,9 @@ function normalizeNode(raw) {
     conversationId: asText(raw.conversationId, 128),
     conversationTitle: asText(raw.conversationTitle, 160),
     agent: asEnum(raw.agent, AGENTS, 'unknown'),
+    executorKind: asEnum(raw.executorKind, EXECUTOR_KINDS),
+    route: normalizeRoute(raw.route),
+    nativeChildren: normalizeNativeChildren(raw.nativeChildren),
     kind: asEnum(raw.kind, KINDS, 'agent'),
     label: asText(raw.label, 160) || t('dash'),
     role: asText(raw.role, 80),
@@ -387,6 +490,7 @@ function normalizeNode(raw) {
     relation: asEnum(raw.relation, RELATIONS, 'unlinked'),
     tokens: tokenUsage?.total ?? asTokens(raw.tokens),
     tokenUsage,
+    performance: normalizePerformance(raw.performance),
   };
 }
 
@@ -653,6 +757,91 @@ function kindLabel(kind) {
   return t('kindAgent');
 }
 
+function executorLabel(kind) {
+  if (kind === 'host') return t('executorHost');
+  if (kind === 'external') return t('executorExternal');
+  return t('dash');
+}
+
+function childStateLabel(stateValue) {
+  if (stateValue === 'verified') return t('childVerified');
+  if (stateValue === 'reported') return t('childReported');
+  if (stateValue === 'blocked') return t('childBlocked');
+  return t('childUnknown');
+}
+
+function phaseLabel(phase) {
+  const key = {
+    prepare: 'phasePrepare',
+    launch: 'phaseLaunch',
+    execute: 'phaseExecute',
+    collect: 'phaseCollect',
+    verify: 'phaseVerify',
+    integrate: 'phaseIntegrate',
+    blocked: 'phaseBlocked',
+    finished: 'phaseFinished',
+    unknown: 'phaseUnknown',
+  }[phase];
+  return key ? t(key) : t('phaseUnknown');
+}
+
+export function formatDuration(ms) {
+  if (!Number.isSafeInteger(ms) || ms < 0) return t('dash');
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) {
+    const seconds = ms / 1000;
+    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  }
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const rest = totalSeconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
+function phaseDurationsLabel(performance) {
+  if (!performance?.durationsMs) return t('dash');
+  const items = [];
+  for (const phase of TIMING_PHASES) {
+    const value = performance.durationsMs[phase];
+    if (value != null) items.push(`${phaseLabel(phase)} ${formatDuration(value)}`);
+  }
+  return items.length ? items.join(' · ') : t('dash');
+}
+
+export function routeSummary(node) {
+  const route = node?.route;
+  if (!route) return null;
+  const parts = ['adaptive'];
+  if (route.resourceId) parts.push(route.resourceId);
+  if (route.preference) parts.push(route.preference);
+  return parts.join(' · ');
+}
+
+export function performanceSummary(node) {
+  const timing = node?.performance;
+  if (!timing) return null;
+  const parts = [phaseLabel(timing.phase)];
+  if (timing.blockedMs != null) parts.push(`${t('fieldBlocked')} ${formatDuration(timing.blockedMs)}`);
+  const phaseMs = timing.durationsMs?.[timing.phase];
+  if (phaseMs != null) parts.push(formatDuration(phaseMs));
+  return parts.join(' · ');
+}
+
+export function nativeChildrenSummary(node) {
+  const children = node?.nativeChildren;
+  if (!children) return null;
+  const count = children.count == null ? t('dash') : String(children.count);
+  return `${childStateLabel(children.state)} · ${count}`;
+}
+
+export function agentMeta(node) {
+  const parts = [node.agent];
+  const executor = executorLabel(node.executorKind);
+  parts.push(executor !== t('dash') ? executor : kindLabel(node.kind));
+  if (node.route?.mode === 'adaptive') parts.push('adaptive');
+  return parts.join(' · ');
+}
+
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -917,7 +1106,7 @@ function renderAgentCell(row) {
   });
   const copy = el('span', { className: 'agent-copy' }, [
     el('span', { className: 'agent-label', text: row.node.label }),
-    el('span', { className: 'agent-meta', text: `${row.node.agent} · ${kindLabel(row.node.kind)}` }),
+    el('span', { className: 'agent-meta', text: agentMeta(row.node) }),
   ]);
   if (row.isContext) copy.append(el('span', { className: 'visually-hidden', text: t('contextRow') }));
   select.append(copy);
@@ -1027,6 +1216,39 @@ function tokenDetailFields(node) {
   return fields;
 }
 
+function routeDetailFields(node) {
+  const route = node.route;
+  return [
+    [t('fieldExecutor'), executorLabel(node.executorKind)],
+    [t('fieldRouteMode'), route?.mode || t('dash')],
+    [t('fieldRouteResource'), route?.resourceId, true],
+    [t('fieldRoutePreference'), route?.preference],
+    [t('fieldRouteReasons'), route?.reasons?.length ? route.reasons.join(' · ') : t('dash')],
+  ];
+}
+
+function performanceDetailFields(node) {
+  const timing = node.performance;
+  return [
+    [t('fieldPhase'), timing ? phaseLabel(timing.phase) : t('dash')],
+    [t('fieldPhaseDurations'), phaseDurationsLabel(timing)],
+    [t('fieldBlocked'), timing?.blockedMs == null ? t('dash') : formatDuration(timing.blockedMs)],
+    [t('fieldBlocker'), timing?.blockerCategory],
+    [t('fieldLastProgress'), formatTime(timing?.lastProgressAt)],
+    [t('fieldLastObserved'), formatTime(timing?.lastObservedAt)],
+    [t('fieldLegacyPrehistory'), timing?.legacyPrehistory ? t('yes') : timing ? t('no') : t('dash')],
+  ];
+}
+
+function nativeChildrenDetailFields(node) {
+  const children = node.nativeChildren;
+  return [
+    [t('fieldNativeChildren'), children ? `${childStateLabel(children.state)} · ${children.complete ? t('tokenComplete') : t('tokenPartial')}` : t('dash')],
+    [t('fieldNativeChildrenSource'), children?.source],
+    [t('fieldNativeChildrenCount'), children?.count == null ? t('dash') : String(children.count)],
+  ];
+}
+
 function renderDetail(snapshot) {
   const pane = document.getElementById('detail');
   const body = document.getElementById('detail-body');
@@ -1063,6 +1285,9 @@ function renderDetail(snapshot) {
     [t('fieldSource'), node.source],
     [t('fieldConfidence'), node.confidence],
     [t('fieldRelation'), node.relation],
+    ...routeDetailFields(node),
+    ...performanceDetailFields(node),
+    ...nativeChildrenDetailFields(node),
     ...tokenDetailFields(node),
   ];
   const list = el('dl', { className: 'detail-list' });
