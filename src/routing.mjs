@@ -50,6 +50,10 @@ function validateProfileIds(value, field) {
 
 export function validateExecution(input) {
   if (!isPlainObject(input)) throw routeError('invalid_execution', 'Execution selector must be an object.');
+  if (Object.hasOwn(input, 'native')) {
+    if (input.native !== true || Object.keys(input).length !== 1) throw routeError('invalid_execution', 'Native execution accepts only {native:true}.');
+    return { native: true };
+  }
   const allowed = new Set(['profile', 'policy', 'profiles', 'requireCapabilities', 'allowShared']);
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) throw routeError('invalid_execution', `Unknown execution selector field: ${key}`, { field: key });
@@ -446,6 +450,7 @@ function attemptRecord(run, task, attemptId) {
 }
 
 function attemptClosed(attempt) {
+  if (attempt.nativeChildren?.complete === false) return false;
   if (attempt.workerClosed === true) return true;
   const noWorkerLaunched = !attempt.paneId && !attempt.terminalId && !attempt.launchFinishedAt;
   if (noWorkerLaunched && ['failed', 'cancelled', 'canceled'].includes(attempt.status)) return true;

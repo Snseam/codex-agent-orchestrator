@@ -183,6 +183,7 @@ export function validateTask(object) {
   if (!AGENTS.has(agent)) {
     throw taskError('invalid_task', 'agent must be claude, pi, opencode, codex, or auto', { agent });
   }
+  if (execution?.native && agent === 'auto') throw taskError('invalid_task', 'Native execution requires a concrete agent.');
 
   const role = object.role === undefined ? 'implementer' : requireString(object.role, 'role', { nonempty: true });
   const allowedPaths = normalizeAllowedPaths(object.allowedPaths);

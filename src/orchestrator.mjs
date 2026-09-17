@@ -18,6 +18,8 @@ import { trackAttempt, summarizeRun } from './performance/index.mjs';
 import { preflightProject } from './preflight.mjs';
 import { validateResult } from './results.mjs';
 import { startHostTask, reportHostTask, releaseHostTask, assertHostOwner } from './host.mjs';
+import { ResourceService } from './resources/index.mjs';
+import { checkNativeChildren } from './native-children.mjs';
 
 const time = () => new Date().toISOString();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -37,7 +39,7 @@ export function defaultStateRoot() {
 }
 
 export class Orchestrator {
-  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution, telemetry = prepareClaudeTelemetry, coordinatorId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null } = {}) {
+  constructor({ stateRoot = defaultStateRoot(), herdr = new Herdr(), command = runCommand, profiles, gateways, materialize = prepareExecution, telemetry = prepareClaudeTelemetry, resourceResolver, coordinatorId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null } = {}) {
     this.root = path.resolve(stateRoot);
     this.herdr = herdr;
     this.command = command;
@@ -45,6 +47,7 @@ export class Orchestrator {
     this.gateways = gateways || new GatewayManager({ root: this.root, profiles: this.profiles });
     this.materialize = materialize;
     this.telemetry = telemetry;
+    this.resourceResolver = resourceResolver || (id => new ResourceService({ root: this.root }).get(id));
     this.coordinatorId = typeof coordinatorId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(coordinatorId) ? coordinatorId : null;
   }
 
@@ -136,7 +139,7 @@ export class Orchestrator {
     });
   }
 
-  async _reserve(runId, definition, feedback, retry = false, { executorKind = 'external', ownerThreadId = null } = {}) {
+  async _reserve(runId, definition, feedback, retry = false, { executorKind = 'external', ownerThreadId = null, routeDecision = null } = {}) {
     const initial = await this._loadRun(runId);
     const key = crypto.createHash('sha256').update(initial.project).digest('hex');
     return state.withLock(path.join(this.root, 'locks', `project-${key}`), () => this._change(runId, async run => {
@@ -195,6 +198,8 @@ export class Orchestrator {
         coordinatorThreadId: this.coordinatorId,
         ...(definition.deadlineAt ? { deadlineAt: definition.deadlineAt } : {}),
       };
+      const binding = routeDecision || previous?.routeDecision;
+      if (binding) attempt.routeDecision = structuredClone(binding);
       if (executorKind === 'host') {
         Object.assign(attempt, { executorKind, ownerThreadId, deliveryMode: 'in-place', status: 'running',
           cwd: run.project, baseline: previous?.baseline || await git.snapshot(run.project), hostStoppedEvidence: null,
@@ -210,9 +215,9 @@ export class Orchestrator {
     }));
   }
 
-  async dispatch(runId, input) {
+  async dispatch(runId, input, { routeDecision = null } = {}) {
     const task = validateTask(input);
-    const reserved = await this._reserve(runId, task);
+    const reserved = await this._reserve(runId, task, '', false, { routeDecision });
     if (reserved.duplicate) return { duplicate: true, ...(await this.inspect(runId, task.id)) };
     await this._launch(reserved);
     return this.inspect(runId, task.id);
@@ -222,7 +227,7 @@ export class Orchestrator {
     const run = await this._loadRun(runId);
     const task = validateTask(input);
     const defaultProfile = task.execution ? null : await this.profiles.getDefault();
-    const selector = task.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
+    const selector = task.execution?.native ? null : task.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
     let agent = task.agent;
     if (selector) {
       const decision = await explainRoute(this.profiles, selector, { agent: agent === 'auto' ? null : agent });
@@ -235,6 +240,16 @@ export class Orchestrator {
 
   async performance(runId) {
     return summarizeRun(await this._loadRun(runId));
+  }
+
+  async _nativeChildren(runId, task, attempt, report) {
+    if (!attempt.submissionStartedAt && !attempt.paneId) return { state: 'verified', complete: true, source: 'controller-no-worker-created', children: [], reasons: [] };
+    const evidence = await checkNativeChildren({ root: this.root, runId, task: this._effectiveTask(task, attempt), attempt, report });
+    if (evidence.state === 'unknown' && attempt.routeDecision?.mode !== 'adaptive') return {
+      ...evidence, state: 'reported', complete: (report?.children || []).every(child => ['completed', 'cancelled'].includes(child.status)),
+      source: 'legacy-report-contract', reasons: [...evidence.reasons, 'legacy_report_contract'],
+    };
+    return evidence;
   }
 
   async hostStart(runId, task, options) { return startHostTask(this, runId, task, options); }
@@ -259,6 +274,10 @@ export class Orchestrator {
     const update = fn => this._update(run.id, task.definition.id, attempt.id, fn);
     try {
       await fs.mkdir(attempt.directory, { recursive: true, mode: 0o700 });
+      if (attempt.routeDecision?.resource) {
+        const currentResource = await this.resourceResolver(attempt.routeDecision.resource.id);
+        invariant(currentResource?.fingerprint === attempt.routeDecision.resource.fingerprint, 'resource_configuration_changed', 'Selected resource changed since the routing decision. Re-evaluate before starting work.');
+      }
       const preflight = await this.preflight(run.id, task.definition);
       await update(a => { a.preflight = preflight; });
       await this._configureExecution(run, task, attempt);
@@ -343,6 +362,18 @@ export class Orchestrator {
   }
 
   async _configureExecution(run, task, attempt) {
+    if (task.definition.execution?.native) {
+      const resource = attempt.routeDecision?.resource;
+      if (resource) {
+        const group = resource.quotaGroup?.id || '';
+        const capacity = { id: resource.id, protocol: `native-${resource.agent}`, endpoint: resource.endpoint || undefined,
+          account: { id: group.startsWith('account:') ? group.slice(8) : null, maxParallel: 1 } };
+        const reservation = await reserveExecution(this.root, capacity, { runId: run.id, taskId: task.definition.id, attemptId: attempt.id });
+        attempt.nativeReservation = reservation;
+        await this._update(run.id, task.definition.id, attempt.id, a => { a.nativeReservation = reservation; });
+      }
+      return;
+    }
     const defaultProfile = task.definition.execution ? null : await this.profiles.getDefault();
     const selector = task.definition.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
     if (!selector) {
@@ -360,6 +391,11 @@ export class Orchestrator {
     };
     attempt.execution = execution;
     await this._update(run.id, task.definition.id, attempt.id, a => { a.execution = structuredClone(execution); });
+    if (attempt.routeDecision?.mode === 'adaptive') {
+      execution.excludedFallbacks = selected.profile.fallbacks.map(profileId => ({ profileId, reason: 'adaptive_attempt_pinned' }));
+      await this._update(run.id, task.definition.id, attempt.id, a => { a.execution = structuredClone(execution); });
+      return;
+    }
     for (const id of selected.profile.fallbacks) {
       if (id === selected.profile.id) continue;
       const decision = await explainRoute(this.profiles, { profile: id, requireCapabilities: selector.requireCapabilities || [], allowShared: execution.allowShared }, { agent: execution.agent });
@@ -381,8 +417,14 @@ export class Orchestrator {
   async _releaseRuntime(runId, taskId, attemptId) {
     const { attempt } = await this._attempt(runId, taskId);
     if (attempt.executorKind === 'host') return;
-    if ((!attempt.execution && !attempt.telemetry) || attempt.runtimeReleasedAt) return;
+    if ((!attempt.execution && !attempt.telemetry && !attempt.nativeReservation) || attempt.runtimeReleasedAt) return;
     invariant(attempt.id === attemptId && attempt.workerClosed, 'worker_not_stopped', 'Stop the worker before releasing its execution resources.');
+    const { task } = await this._attempt(runId, taskId);
+    if (attempt.telemetry?.enabled) {
+      const children = await this._nativeChildren(runId, task.definition, attempt, attempt.report);
+      await this._update(runId, taskId, attemptId, a => { a.nativeChildren = children; });
+      invariant(children.complete, 'native_children_unverified', 'Native children are not confirmed stopped; capacity is retained.');
+    }
     try {
       const gatewayId = attempt.execution?.gateway?.id || attempt.execution?.gatewayId;
       if (gatewayId) {
@@ -410,6 +452,7 @@ export class Orchestrator {
         }
       }
       for (const reservation of attempt.execution?.reservations || []) await releaseExecution(this.root, reservation);
+      if (attempt.nativeReservation) await releaseExecution(this.root, attempt.nativeReservation);
       await this._update(runId, taskId, attemptId, a => { a.runtimeReleasedAt = time(); a.executionCleanup = resources; a.telemetryCleanup = telemetryResources; delete a.runtimeCleanupError; });
     } catch (error) {
       await this._update(runId, taskId, attemptId, a => { a.runtimeCleanupError = serializeError(error); });
@@ -590,17 +633,19 @@ export class Orchestrator {
           invariant(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 131072, 'invalid_result', 'Result must be a regular file of at most 128 KiB.');
           const report = this._validateResult(await state.readJson(attempt.resultFile), task.definition, attempt);
           const childrenComplete = report.children.every(c => ['completed', 'cancelled'].includes(c.status));
+          const nativeChildren = await this._nativeChildren(runId, task.definition, attempt, report);
           const snap = await git.snapshot(attempt.cwd);
           const changed = git.changedPaths(attempt.baseline, snap);
           const unexpected = outsideScope(changed, task.definition.allowedPaths);
-          const resultState = report.status === 'needs_input' || !childrenComplete || report.unresolved.length || unexpected.length ? 'needs_input' : 'submitted';
+          const resultState = report.status === 'needs_input' || !childrenComplete || !nativeChildren.complete || report.unresolved.length || unexpected.length ? 'needs_input' : 'submitted';
           const output = await this.herdr.readAgent(run.herdrSession, attempt.workerName);
           await fs.writeFile(path.join(attempt.directory, 'terminal.txt'), output, { mode: 0o600 });
           await this._update(runId, taskId, attempt.id, a => {
             a.report = report; a.collectedAt = time(); a.snapshot = snap; a.changedPaths = changed;
+            a.nativeChildren = nativeChildren;
             a.outsideScope = unexpected; if (!a.cancelRequested) a.status = resultState;
             if (unexpected.length) a.lastError = { code: 'scope_violation', message: 'Reported candidate changed paths outside task scope.' };
-            else if (!childrenComplete) a.lastError = { code: 'children_unfinished', message: 'Native children are still running or unknown.' };
+            else if (!childrenComplete || !nativeChildren.complete) a.lastError = { code: 'children_unfinished', message: 'Native children are still running or unknown.' };
             else if (report.unresolved.length || report.status === 'needs_input') a.lastError = { code: 'worker_blocked', message: 'Worker reported unresolved work; inspect the report.' };
             else delete a.lastError;
             delete a.executionPhase;
@@ -653,6 +698,11 @@ export class Orchestrator {
         assertHostOwner(this, attempt, hostThread);
         invariant(attempt.hostStoppedEvidence, 'host_not_stopped', 'The host must report that all editing has stopped.');
       }
+      if (!isHost) {
+        const children = await this._nativeChildren(runId, task.definition, attempt, attempt.report);
+        await this._update(runId, taskId, attempt.id, a => { a.nativeChildren = children; });
+        invariant(children.complete, 'native_children_unverified', 'Native children must be resolved before verification.');
+      }
       invariant(['submitted', 'accepted'].includes(attempt.status), 'not_submitted', 'Collect a valid submitted result before verification.');
       invariant(!attempt.outsideScope?.length, 'scope_violation', 'Worker changed files outside its allowed paths.');
       invariant((await git.snapshot(attempt.cwd)).hash === attempt.snapshot.hash, 'candidate_changed', 'Candidate changed since collection; recollect or retry.');
@@ -660,7 +710,7 @@ export class Orchestrator {
       if (!isHost) {
         await this._closeWorker(run, attempt);
         await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
-        await this._releaseRuntime(runId, taskId, attempt.id);
+      await this._releaseRuntime(runId, taskId, attempt.id);
       }
       await this._update(runId, taskId, attempt.id, a => { invariant(!a.cancelRequested, 'cancel_requested', 'Verification was cancelled.'); a.status = 'verifying'; a.operation = { kind: 'verification', pid: process.pid, host: os.hostname(), finishedAt: null }; });
       const checks = [];

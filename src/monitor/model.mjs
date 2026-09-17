@@ -43,6 +43,8 @@ export function publicNode(node, observedAt) {
     id: cleanText(node.id, 256), parentId: cleanText(node.parentId, 256),
     agent: agents.has(node.agent) ? node.agent : 'unknown',
     executorKind: ['host', 'external'].includes(node.executorKind) ? node.executorKind : null,
+    route: node.route?.mode === 'adaptive' ? { mode: 'adaptive', resourceId: cleanText(node.route.resourceId, 160), preference: cleanText(node.route.preference, 40), reasons: (Array.isArray(node.route.reasons) ? node.route.reasons : []).slice(0, 12).map(reason => cleanText(reason, 160)) } : null,
+    nativeChildren: node.nativeChildren ? { state: ['verified', 'reported', 'unknown', 'blocked'].includes(node.nativeChildren.state) ? node.nativeChildren.state : 'unknown', complete: node.nativeChildren.complete === true, source: cleanText(node.nativeChildren.source, 80), count: Array.isArray(node.nativeChildren.children) ? node.nativeChildren.children.length : null } : null,
     kind: ['coordinator', 'agent', 'subagent'].includes(node.kind) ? node.kind : 'agent',
     label: cleanText(node.label) || 'Agent', role: cleanText(node.role, 80), model: cleanText(node.model, 120),
     conversationTitle: cleanText(node.conversationTitle, 120),

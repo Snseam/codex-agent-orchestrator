@@ -20,7 +20,9 @@ async function fixture(t) {
 
 test('Herdr makes a discovered NVM executable available only in its owned pane', async t => {
   const { root, bin } = await fixture(t);
-  const env = { PATH: path.dirname(process.execPath), HOME: root };
+  const emptyPath = path.join(root, 'empty-path');
+  await fs.mkdir(emptyPath);
+  const env = { PATH: emptyPath, HOME: root };
   const calls = [];
   const herdr = new Herdr({ binary: process.execPath, environment: env, runner: async argv => { calls.push(argv); return { code: 0, stdout: '{"result":{}}', stderr: '' }; } });
   assert.equal((await herdr.preflight('pi')).agent.available, true);
@@ -28,7 +30,7 @@ test('Herdr makes a discovered NVM executable available only in its owned pane',
   assert.ok(calls.some(argv => argv.includes('run') && argv.some(value => value.includes(`export PATH='${bin}'`))));
   assert.ok(calls.some(argv => argv.includes('wait-output')));
   assert.ok(calls.at(-1).includes('start'));
-  assert.equal(env.PATH, path.dirname(process.execPath));
+  assert.equal(env.PATH, emptyPath);
 });
 
 test('Pi model limits are explicit when declared and price placeholders remain unknown', async t => {

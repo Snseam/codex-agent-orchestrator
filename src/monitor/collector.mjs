@@ -45,6 +45,8 @@ function taskNode(run, task, attempt, now) {
     id: caoNodeId(run.id, task.definition.id, attempt.id), parentId: coordinator ? `codex:${coordinator}` : null,
     agent: attempt.execution?.agent || task.definition.agent, kind: 'agent',
     executorKind: attempt.executorKind || 'external',
+    route: attempt.routeDecision ? { mode: attempt.routeDecision.mode, resourceId: attempt.routeDecision.resource?.id || null, preference: attempt.routeDecision.preference, reasons: attempt.routeDecision.reasons } : null,
+    nativeChildren: attempt.nativeChildren || null,
     label: `${task.definition.id} · ${attempt.number || 1}`, role: task.definition.role || 'implementer',
     model: attempt.execution?.model || null, projectId: run.project, runId: run.id, taskId: task.definition.id,
     attemptId: attempt.id, nativeSessionId: attempt.nativeSession?.id || attempt.telemetry?.nativeSessionId || null,

@@ -20,6 +20,7 @@ import { getProjectInfo } from '../src/git.mjs';
 import { installCaoSkill, statusCaoSkill, uninstallCaoSkill } from '../src/skills.mjs';
 import { disableConversationMode, enableConversationMode, statusConversationMode, resolveThreadId } from '../src/conversation-mode.mjs';
 import { explainShadowRoute, recordShadowDecision } from '../src/shadow-routing.mjs';
+import { AdaptiveDispatcher } from '../src/adaptive-dispatch.mjs';
 import { Supervisor } from '../src/supervisor/index.mjs';
 import { submitResult, MAX_RESULT_BYTES } from '../src/results.mjs';
 import { ResourceService } from '../src/resources/index.mjs';
@@ -32,7 +33,8 @@ Usage: node bin/cao.mjs <command> [options]
 
   init       --project PATH [--id ID] [--max-parallel 4]
   validate   --file TASK.json
-  dispatch   --run ID --file TASK.json
+  dispatch   --run ID --file TASK.json [--adaptive] [--thread ID] [--resources ID,ID]
+             [--executor host|external] [--preference balanced|fastest|subscription-first|quality-first]
   preflight  --run ID --file TASK.json (read-only; no model calls)
   supervise  --run ID [--wait-ms 30000] [--poll-ms 1000] [--integrate] [--repair-reports]
   step       --run ID [--integrate] [--repair-reports]
@@ -70,7 +72,7 @@ Usage: node bin/cao.mjs <command> [options]
   skill uninstall [--skills-dir PATH]
   mode enable [--thread ID] [--project PATH] [--agent auto|claude|pi|opencode|codex]
              [--profile ID] [--max-parallel N] [--max-attempts N]
-             [--strategy delegated|shadow] [--preference balanced|fastest|subscription-first|quality-first]
+             [--strategy delegated|shadow|adaptive] [--preference balanced|fastest|subscription-first|quality-first]
   mode status [--thread ID]
   mode disable [--thread ID]
 
@@ -116,7 +118,7 @@ Task deadlineAt is an optional ISO UTC deadline, enforced while a controller/che
 `;
 
 const optionsByCommand = {
-  init: ['project', 'id', 'max-parallel'], validate: ['file'], dispatch: ['run', 'file'],
+  init: ['project', 'id', 'max-parallel'], validate: ['file'], dispatch: ['run', 'file', 'adaptive', 'thread', 'resources', 'executor', 'preference'],
   preflight: ['run', 'file'], supervise: ['run', 'wait-ms', 'poll-ms', 'integrate', 'repair-reports'],
   step: ['run', 'integrate', 'repair-reports'], 'performance report': ['run'],
   'result submit': ['attempt-dir', 'file', 'stdin'],
@@ -160,7 +162,7 @@ export function parseArgs(argv) {
     }
     const [name, ...inlineParts] = token.slice(2).split('=');
     if (Object.hasOwn(values, name)) throw new OrchestratorError('invalid_arguments', `Duplicate option: --${name}`);
-    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open', 'integrate', 'repair-reports', 'quick', 'refresh', 'confirm-stopped', 'retry', 'ack-stopped', 'record', 'no-host'].includes(name)) {
+    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open', 'integrate', 'repair-reports', 'quick', 'refresh', 'confirm-stopped', 'retry', 'ack-stopped', 'record', 'no-host', 'adaptive'].includes(name)) {
       if (inlineParts.length) throw new OrchestratorError('invalid_arguments', `--${name} takes no value`);
       values[name] = true;
     } else {
@@ -318,6 +320,7 @@ export async function main(argv = process.argv.slice(2)) {
     case 'secret remove': await profiles.removeSecret(required('id')); return { id: o.id, removed: true };
     case 'route explain': {
       const task = validateTask(await readProfile(required('file')));
+      if (task.execution?.native) return { selectedProfileId: null, mode: 'explicit-native-config', agent: task.agent };
       const defaultProfile = task.execution ? null : await profiles.getDefault();
       const selector = task.execution || (defaultProfile ? { profile: defaultProfile.id } : null);
       if (!selector) return { selectedProfileId: null, mode: 'inherited-agent-config', agent: task.agent };
@@ -356,7 +359,21 @@ export async function main(argv = process.argv.slice(2)) {
       return submitResult(required('attempt-dir'), report);
     }
     case 'validate': return validateTask(JSON.parse(await read(required('file'))));
-    case 'dispatch': return orchestrator.dispatch(required('run'), JSON.parse(await read(required('file'))));
+    case 'dispatch': {
+      const input = JSON.parse(await read(required('file')));
+      const thread = resolveThreadId(o.thread);
+      const mode = await statusConversationMode({ stateRoot: profiles.root, thread });
+      if (!o.adaptive && !(mode.enabled && mode.strategy === 'adaptive')) {
+        if (o.resources || o.executor || o.preference) throw new OrchestratorError('invalid_arguments', 'Routing options require --adaptive or an enabled adaptive conversation.');
+        return orchestrator.dispatch(required('run'), input);
+      }
+      const fixedAgent = mode.enabled && o.executor !== 'host' && mode.agent !== 'auto' ? mode.agent : null;
+      return new AdaptiveDispatcher({ orchestrator }).dispatch(required('run'), input, {
+        thread, preference: o.preference || mode.preference, fixedExecutorKind: o.executor,
+        ...(o.resources === undefined ? {} : { allowedResourceIds: o.resources.split(',') }),
+        fixedProfileId: mode.enabled && o.executor !== 'host' ? mode.profile : null, fixedAgent,
+      });
+    }
     case 'status': return orchestrator.status(o.run);
     case 'inspect': return orchestrator.inspect(...taskArgs(), { output: !!o.output });
     case 'collect': return orchestrator.collect(...taskArgs(), { waitMs: Number(o['wait-ms'] || 0) });

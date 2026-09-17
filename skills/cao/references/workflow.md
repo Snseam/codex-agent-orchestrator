@@ -34,6 +34,10 @@ If `mode status` reports `strategy: shadow`, call `route shadow --file TASK.json
 
 Report delivered behavior, independent verification, actual external sessions/repair attempts, and remaining limitations. Retain run/task IDs and evidence paths for the conversation's next turn.
 
+## Adaptive dispatch
+
+For an enabled adaptive conversation, use normal `dispatch` with the same conversation identity, or `dispatch --adaptive` for one task. Inspect resources and existing evidence first. Do not automatically calibrate or install missing agents. Preserve explicit user agent/profile/resource choices. Leave task agent unspecified or auto only when the user permits selection. When the returned attempt is host-owned, follow the host workflow below; otherwise supervise the external attempt. A route bound to an attempt is not proof of acceptance. Unfinished or unknown native children block collect/verify; retries keep the bound configuration and do not silently take a fallback. Preference ranking uses completion rate before elapsed time and is not a general speed or quality guarantee. Details and limits are in the checkout's `docs/adaptive-dispatch.md`.
+
 ## Work in the current Codex conversation
 
 Use this path when the user chooses current-Codex execution for the task. It does not start another Codex CLI and is not an automatic fallback from external failure.

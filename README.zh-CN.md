@@ -289,6 +289,7 @@ npm run smoke -- --live           # 受控失败 → 修复 → 集成
 | [监督与性能记录](docs/zh-CN/supervision.md) | 前台控制器、预检、报告提交、截止时间和耗时证据 |
 | [资源发现与校准](docs/zh-CN/resources.md) | 原生/NVM 安装发现、CC Switch Pi 配置、隔离探针和缓存 |
 | [任务交接与 shadow 调度](docs/zh-CN/shadow-routing.md) | 建议选择、对话偏好与证据边界 |
+| [显式自适应派发](docs/zh-CN/adaptive-dispatch.md) | 实际资源选择、attempt 配置绑定和原生子代理验收证据 |
 | [当前 Codex 的 host 任务](docs/zh-CN/host-work.md) | 不启动外部会话，登记、提交并独立验收原位修改 |
 | [Token 用量报告](docs/zh-CN/usage.md) | 可选 Tokscale 集成、JSON 形状与归属边界 |
 | [CAO Codex 技能](docs/zh-CN/codex-skill.md) | 复制指令安装、`/CAO` 启用、对话偏好和更新 |

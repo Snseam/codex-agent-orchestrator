@@ -25,13 +25,13 @@ export function assertHostOwner(orchestrator, attempt, thread) {
   return owner;
 }
 
-export async function startHostTask(orchestrator, runId, input, { thread, retry = false } = {}) {
+export async function startHostTask(orchestrator, runId, input, { thread, retry = false, routeDecision = null } = {}) {
   const ownerThreadId = hostThread(orchestrator, thread);
   invariant(input && !input.execution && (!input.agent || input.agent === 'codex') && (!input.isolation || input.isolation === 'checkout'), 'invalid_host_task', 'Host tasks use the current Codex and checkout; external profiles are not applied.');
   const definition = validateTask({ ...input, agent: 'codex', isolation: 'checkout' });
   invariant(!definition.agentArgs.length, 'invalid_host_task', 'Host work cannot launch CLI arguments.');
   invariant(!definition.deadlineAt || Date.parse(definition.deadlineAt) > Date.now(), 'deadline_exceeded', 'Host task deadline has passed.');
-  const reserved = await orchestrator._reserve(runId, definition, '', retry, { executorKind: 'host', ownerThreadId });
+  const reserved = await orchestrator._reserve(runId, definition, '', retry, { executorKind: 'host', ownerThreadId, routeDecision });
   if (reserved.duplicate) return { ...(await orchestrator.inspect(runId, definition.id)), duplicate: true };
   const { attempt } = reserved;
   try {

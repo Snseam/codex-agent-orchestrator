@@ -32,6 +32,8 @@ On subsequent development requests, read `mode status` with the same conversatio
 
 When the user requests shadow routing, enable `--strategy shadow` with their chosen `--preference`. This records advisory choices while preserving the existing execution selection. A shadow recommendation has `applied: false`; it does not authorize changing the executor. For an explicitly requested current-Codex task, use the host path in the coordination guide to register work and run independent checks without starting an external session. Existing conversations remain `delegated` unless changed.
 
+When explicitly asked for active adaptive routing, enable `--strategy adaptive`. Dispatch then chooses and binds an eligible resource using the declared constraints and existing evidence. Unfinished or unknown native children block acceptance; retries keep that bound configuration. Read the adaptive section of the coordination guide; enabling it does not authorize automatic calibration or installations.
+
 Before an interruption or compaction, retain these details in conversation handoff notes: CAO mode, conversation ID, CLI wrapper path, state directory, target project, agent/profile and limits, and any active run/task IDs. On recovery, inspect the saved mode and existing run before dispatching work. The state file supports recovery; it is not a scheduler or a mechanism that changes Codex's global settings.
 
 Installation makes this skill discoverable in other conversations. Each conversation activates its own preference. Merely mentioning CAO in unrelated discussion, loading a disabled mode for inspection, or installing the skill does not authorize enabling other conversations.

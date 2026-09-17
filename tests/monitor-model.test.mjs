@@ -19,7 +19,7 @@ test('publicSnapshot exposes only browser contract fields and strips sensitive t
   }, now);
 
   assert.deepEqual(Object.keys(snapshot.nodes[0]).sort(), [
-    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'executorKind', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'observedAt',
+    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'executorKind', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'nativeChildren', 'route', 'observedAt',
     'parentId', 'performance', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
   ].sort());
   const serialized = JSON.stringify(snapshot);
@@ -87,6 +87,31 @@ test('token metadata keeps an authoritative total without summing detail counter
   assert.equal(empty.nodes[0].tokens, null);
   assert.equal(empty.nodes[0].tokenUsage, null);
   assert.equal(empty.nodes[1].tokens, 0);
+});
+
+test('publicSnapshot keeps host executorKind and adaptive-only route metadata', () => {
+  const snapshot = publicSnapshot({
+    nodes: [{
+      id: 'host-node', executorKind: 'host',
+      route: { mode: 'adaptive', resourceId: 'native-host', preference: 'balanced', reasons: ['preference:balanced'] },
+      nativeChildren: { state: 'verified', complete: true, source: 'controller-no-worker-created', children: [] },
+    }],
+    projects: [], sources: [], scope: {},
+  }, now);
+  assert.equal(snapshot.nodes[0].executorKind, 'host');
+  assert.deepEqual(snapshot.nodes[0].route, {
+    mode: 'adaptive', resourceId: 'native-host', preference: 'balanced', reasons: ['preference:balanced'],
+  });
+  assert.equal(snapshot.nodes[0].nativeChildren.state, 'verified');
+  assert.equal(snapshot.nodes[0].nativeChildren.complete, true);
+  assert.equal(snapshot.nodes[0].nativeChildren.count, 0);
+
+  const other = publicSnapshot({
+    nodes: [{ id: 'ext', executorKind: 'external', route: { mode: 'shadow', resourceId: 'secret' } }],
+    projects: [], sources: [], scope: {},
+  }, now);
+  assert.equal(other.nodes[0].executorKind, 'external');
+  assert.equal(other.nodes[0].route, null);
 });
 
 test('re-sanitizing snapshots cannot turn ambiguous or cyclic conversation ancestry into a confirmed group', () => {

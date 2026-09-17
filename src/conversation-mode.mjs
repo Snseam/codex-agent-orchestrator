@@ -4,7 +4,7 @@ import { OrchestratorError, invariant } from './errors.mjs';
 import { readJson, validateId, withLock, writeJsonAtomic } from './state.mjs';
 
 const AGENTS = new Set(['auto', 'claude', 'pi', 'opencode', 'codex']);
-const STRATEGIES = new Set(['delegated', 'shadow']);
+const STRATEGIES = new Set(['delegated', 'shadow', 'adaptive']);
 const PREFERENCES = new Set(['balanced', 'fastest', 'subscription-first', 'quality-first']);
 
 function modeError(code, message, details = {}) {
@@ -100,7 +100,7 @@ function parsePositiveInteger(value, field, max) {
 async function normalizedUpdates(options) {
   const updates = {};
   if (options.strategy !== undefined) {
-    invariant(STRATEGIES.has(options.strategy), 'invalid_arguments', 'strategy must be delegated or shadow; active adaptive routing is not enabled.');
+    invariant(STRATEGIES.has(options.strategy), 'invalid_arguments', 'strategy must be delegated, shadow, or adaptive.');
     updates.strategy = options.strategy;
   }
   if (options.preference !== undefined) {

@@ -104,6 +104,7 @@ Child/inner-agent reporting:
 - You may use native child/subagent/team mechanisms only if this agent installation actually supports them and the needed tools are enabled.
 - If max native children requested/reported is 0, do not start child/subagent/team work; complete the task in this session.
 - Do not claim inner delegation occurred unless it actually did.
+- For Claude Code, use the native agent id from SubagentStart/SubagentStop evidence in children[].id. A parent stop or idle state does not establish that children stopped; telemetry may block acceptance even if a child is omitted from this report.
 - Track every child you start in the final result JSON as {id,status}. Valid child statuses are "completed", "cancelled", "running", and "unknown".
 - The orchestrator does not treat your terminal idle state as proof that children completed; report unresolved child work explicitly.
 

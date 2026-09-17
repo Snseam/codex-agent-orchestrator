@@ -6,6 +6,7 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Opt-in adaptive dispatch (`dispatch --adaptive` or `mode enable --strategy adaptive`) that binds one eligible resource to an attempt, pins retries to that binding, and treats unfinished or unknown native children as blockers. Preference ranking uses completion rate before elapsed time; it is not a live-agent speed or quality guarantee.
 - Optional bounded task briefs and unapplied `route shadow` recommendations with versioned per-conversation preferences. Existing dispatch defaults remain delegated.
 - Current-Codex `host start/report/verify/release/recover` workflow with checkout ownership, explicit stopped reports, bounded retries and independent in-place verification; cancellation does not pretend to stop the App turn.
 - English/Chinese host and shadow-routing guides, updated CAO skill guidance, and host/external executor metadata in monitor snapshots.

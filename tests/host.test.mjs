@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { Orchestrator } from '../src/orchestrator.mjs';
 import { Supervisor } from '../src/supervisor/index.mjs';
 import { fixture, task, FakeHerdr } from './helpers.mjs';
@@ -144,7 +144,8 @@ test('mode schema migration preserves legacy behavior and rejects unknown active
   await disableConversationMode(opts);
   assert.equal((await statusConversationMode(opts)).preference, 'subscription-first');
   assert.equal((await enableConversationMode(opts)).strategy, 'shadow');
-  await assert.rejects(enableConversationMode({ ...opts, strategy: 'adaptive' }), e => e.code === 'invalid_arguments');
+  assert.equal((await enableConversationMode({ ...opts, strategy: 'adaptive' })).strategy, 'adaptive');
+  await assert.rejects(enableConversationMode({ ...opts, strategy: 'unknown' }), e => e.code === 'invalid_arguments');
 });
 
 test('host CLI performs real independent checks in a temporary project', async t => {
@@ -183,4 +184,26 @@ test('shadow CLI records an unapplied recommendation without dispatch or capacit
   await fs.writeFile(file, JSON.stringify(hostTask()));
   const hostDecision = JSON.parse(execFileSync(process.execPath, ['bin/cao.mjs', 'route', 'shadow', '--file', file, '--executor', 'host', '--state-dir', f.stateRoot], { encoding: 'utf8', env: { ...process.env, HOME: f.base } })).data;
   assert.equal(hostDecision.selected.executorKind, 'host');
+});
+
+test('adaptive CLI host dispatch requires adaptive flag or mode and does not start Herdr', async t => {
+  const f = await setup(t);
+  const file = path.join(f.base, 'host-task.json');
+  await fs.writeFile(file, JSON.stringify(hostTask()));
+  const env = { ...process.env, HOME: f.base, CODEX_THREAD_ID: 'thread-a', CODEX_SESSION_ID: '' };
+  const denied = spawnSync(process.execPath, ['bin/cao.mjs', 'dispatch', '--run', f.run.id, '--file', file, '--preference', 'fastest', '--state-dir', f.stateRoot], { encoding: 'utf8', env });
+  assert.equal(denied.status, 2);
+  assert.equal(JSON.parse(denied.stderr).error.code, 'invalid_arguments');
+  const cli = (...args) => JSON.parse(execFileSync(process.execPath, ['bin/cao.mjs', ...args, '--state-dir', f.stateRoot], { encoding: 'utf8', env })).data;
+  const started = cli('dispatch', '--run', f.run.id, '--file', file, '--adaptive', '--executor', 'host');
+  assert.equal(started.adaptive, true);
+  assert.equal(started.attempt.executorKind, 'host');
+  assert.equal(started.attempt.routeDecision.mode, 'adaptive');
+  assert.equal(f.runtimeCalls(), 0);
+  await f.service.hostRelease(f.run.id, started.task.id, { ackStopped: true });
+  cli('mode', 'enable', '--strategy', 'adaptive', '--thread', 'thread-a');
+  const viaMode = cli('dispatch', '--run', f.run.id, '--file', file, '--executor', 'host', '--thread', 'thread-a');
+  assert.equal(viaMode.adaptive, true);
+  assert.equal(viaMode.attempt.executorKind, 'host');
+  assert.equal(f.runtimeCalls(), 0);
 });
