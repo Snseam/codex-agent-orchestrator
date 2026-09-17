@@ -61,7 +61,9 @@ export class AdaptiveDispatcher {
         schemaVersion: 1, mode: 'adaptive', applied: true, appliedMeaning: 'bound-to-attempt-not-acceptance',
         requestDigest, inputDigest: plan.inputDigest, decidedAt: new Date().toISOString(),
         selected: plan.decision.selected, resource: plan.selectedResource?.kind === 'host' ? null : plan.selectedResource,
-        preference: selection.preference || 'balanced', reasons: plan.decision.reasons, evidence: plan.evidence,
+        preference: selection.preference || 'balanced',
+        reasons: [...plan.decision.reasons.filter(reason => reason !== 'shadow_advisory_only_not_dispatched'), 'adaptive_bound_to_attempt'],
+        evidence: plan.evidence,
         configurationScope: 'observed-user-config-not-all-project-plugins',
       };
       const result = plan.decision.selected.executorKind === 'host'

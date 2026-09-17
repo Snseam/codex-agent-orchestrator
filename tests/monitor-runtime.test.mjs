@@ -282,3 +282,24 @@ test('cancel releases runtime and preserves modified owned telemetry files while
   assert.equal(scenario.gateways.stops.length, 1);
   assert.deepEqual(await listReservations(scenario.stateRoot), []);
 });
+
+test('a restarted controller resolves state-root aliases before telemetry validation and cleanup', async t => {
+  const f = await fixture();
+  t.after(() => f.remove());
+  const herdr = new FakeHerdr();
+  const original = new Orchestrator({ stateRoot: f.stateRoot, herdr });
+  const run = await original.init({ project: f.project });
+  const launched = await original.dispatch(run.id, task());
+  const alias = path.join(f.base, 'state-alias');
+  await fs.symlink(f.stateRoot, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const restarted = new Orchestrator({ stateRoot: alias, herdr });
+  const collected = await restarted.collect(run.id, 'fix-add');
+  assert.equal(collected.attempt.status, 'submitted');
+  const verified = await restarted.verify(run.id, 'fix-add');
+  assert.equal(verified.attempt.status, 'accepted');
+  assert.ok(verified.attempt.runtimeReleasedAt);
+  assert.equal(restarted.root, await fs.realpath(f.stateRoot));
+  assert.equal(await exists(launched.attempt.telemetry.settingsFile), false);
+  assert.equal(await exists(launched.attempt.telemetry.eventsFile), true);
+  await restarted.cleanup(run.id);
+});

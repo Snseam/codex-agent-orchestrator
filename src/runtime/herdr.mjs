@@ -235,7 +235,10 @@ export class Herdr {
   async startAgent(session, name, kind, pane, args = []) {
     validateSession(session);
     const found = this.agentExecutables.get(kind);
-    if (found?.executable && found.discoverySource !== 'PATH') {
+    // Login shells can replace PATH even when discovery succeeded on our PATH.
+    // Re-establish the discovered directory inside the owned pane before Herdr
+    // resolves the agent (and its adjacent Node runtime) by name.
+    if (found?.executable) {
       const directory = dirname(found.executable);
       const quoted = `'${directory.replaceAll("'", "'\\''")}'`;
       const nonce = randomUUID();

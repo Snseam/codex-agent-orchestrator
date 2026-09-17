@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Snseam/codex-agent-orchestrator/benchmarks/schema.json",
+  "title": "CAO Paired Benchmark Inputs",
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "object",
+      "required": ["schemaVersion", "experimentId", "deadlineMs", "cohorts", "arms", "repetitions"],
+      "properties": {
+        "experimentId": { "type": "string", "minLength": 1 },
+        "schemaVersion": { "const": 1 },
+        "deadlineMs": { "type": "integer", "minimum": 1 },
+        "cohorts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "tasks"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "tasks": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["id"],
+                  "properties": { "id": { "type": "string", "minLength": 1 } }
+                }
+              }
+            }
+          }
+        },
+        "arms": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string" }
+            }
+          }
+        },
+        "repetitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "results": {
+      "type": "object",
+      "required": ["schemaVersion", "experimentId", "trials"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "experimentId": { "type": "string", "minLength": 1 },
+        "trials": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["cohortId", "taskId", "armId", "repetition", "outcome"],
+            "properties": {
+              "cohortId": { "type": "string", "minLength": 1 },
+              "taskId": { "type": "string", "minLength": 1 },
+              "armId": { "type": "string", "minLength": 1 },
+              "repetition": { "type": "integer", "minimum": 1 },
+              "outcome": { "enum": ["accepted", "failed", "timeout", "unjudged", "cancelled"] },
+              "durationMs": { "type": "integer", "minimum": 1 },
+              "projectAcceptance": { "type": "boolean" },
+              "acceptance": {
+                "type": "object",
+                "properties": { "project": { "type": "boolean" } }
+              },
+              "cancelledBy": { "enum": ["user", "system", "deadline"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

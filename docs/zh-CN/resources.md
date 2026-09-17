@@ -73,4 +73,4 @@ node bin/cao.mjs calibration release --reservation RESERVATION_ID --confirm-stop
 
 它不能释放普通任务的 reservation。正常中断和超时会等待 child 终止后自动释放。
 
-资源和校准命令已可独立使用；[任务交接与 shadow 调度](shadow-routing.md) 可根据证据给出建议，[host 工作流](host-work.md) 支持用户明确选择当前 Codex 执行。自动自适应派发与默认工作流更新仍属于后续切片。
+资源和校准命令已可独立使用；[任务交接与 shadow 调度](shadow-routing.md) 可根据证据给出建议，[host 工作流](host-work.md) 支持用户明确选择当前 Codex 执行。[自适应派发](adaptive-dispatch.md) 已支持显式启用后将候选绑定到实际尝试。更新默认工作流仍需真实配对评估；已有对话未显式修改时继续使用 delegated。

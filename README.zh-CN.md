@@ -239,11 +239,11 @@ node bin/cao.mjs monitor start --open
 | Agent | 任务字段值 | 当前验证情况 |
 | --- | --- | --- |
 | Claude Code | `claude` | 本机真实流程与受控失败修复已验证；profiled 本地 relay 已用模拟 Anthropic API 检查 |
-| Pi | `pi` | 原生 CLI 配置请求已通过模拟 API 验证；完整 Herdr 流程待验证 |
+| Pi | `pi` | 隔离的 Kimi `k3` 自适应 Herdr 流程已通过独立验收、集成和清理；其他配置仍待验证 |
 | OpenCode | `opencode` | 已实现启动与 profiled runtime 适配；真实流程待验证 |
 | Codex CLI | `codex` | 原生 CLI 配置请求已通过模拟 API 验证；完整 Herdr 流程待验证 |
 
-继承模式下 `agentArgs` 透传 CLI 启动参数。Profiled task 会拒绝与 profile 管理的模型、provider、session、config 或 worktree 设置冲突的参数；Codex 允许部分 reasoning/verbosity `-c` override。`nativeInstructions` 说明如何使用实际可用的原生工具。`maxChildren` 是报告契约，不是对子代理数量的监测或强制限制。详见[适配器架构](docs/zh-CN/architecture.md)和[执行配置](docs/zh-CN/execution-profiles.md)。
+继承模式下 `agentArgs` 透传 CLI 启动参数。Profiled task 会拒绝与 profile 管理的模型、provider、session、config 或 worktree 设置冲突的参数；Codex 允许部分 reasoning/verbosity `-c` override。`nativeInstructions` 说明如何使用实际可用的原生工具。`maxChildren` 是报告预算，不是运行时硬限制；自适应 Claude 还会在验收前核对可用的 hook 证据。详见[适配器架构](docs/zh-CN/architecture.md)、[执行配置](docs/zh-CN/execution-profiles.md)和[真实联调边界](docs/zh-CN/adaptive-validation.md)。
 
 ## Token 用量
 
@@ -290,6 +290,8 @@ npm run smoke -- --live           # 受控失败 → 修复 → 集成
 | [资源发现与校准](docs/zh-CN/resources.md) | 原生/NVM 安装发现、CC Switch Pi 配置、隔离探针和缓存 |
 | [任务交接与 shadow 调度](docs/zh-CN/shadow-routing.md) | 建议选择、对话偏好与证据边界 |
 | [显式自适应派发](docs/zh-CN/adaptive-dispatch.md) | 实际资源选择、attempt 配置绑定和原生子代理验收证据 |
+| [配对基准评估](docs/zh-CN/benchmark-evaluation.md) | 预先登记试验、完整分母、配对结果与默认上线限制 |
+| [自适应真实联调](docs/zh-CN/adaptive-validation.md) | 已验证的 Claude/Pi 流程、隔离、实际故障与覆盖边界 |
 | [当前 Codex 的 host 任务](docs/zh-CN/host-work.md) | 不启动外部会话，登记、提交并独立验收原位修改 |
 | [Token 用量报告](docs/zh-CN/usage.md) | 可选 Tokscale 集成、JSON 形状与归属边界 |
 | [CAO Codex 技能](docs/zh-CN/codex-skill.md) | 复制指令安装、`/CAO` 启用、对话偏好和更新 |

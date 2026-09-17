@@ -65,4 +65,4 @@ The report includes all attempts and outcomes, including failed, timed-out, canc
 
 Committed `run.json` remains authoritative. `performance.observed` entries in `events.jsonl` carry a schema version, stable event id, sequence and controller epoch when available. Event append failures mark coverage incomplete; old events without those fields remain readable. Performance output excludes full prompts, provider configuration, nonces and terminal output.
 
-Foreground supervision is the first optimization slice. [Resource discovery and isolated calibration](resources.md), [advisory routing](shadow-routing.md), and [current-Codex host work](host-work.md) are also available. Active adaptive dispatch and Pi RPC remain separate follow-up work. No measured speedup is claimed from protocol tests.
+Foreground supervision works with [resource discovery and isolated calibration](resources.md), [advisory routing](shadow-routing.md), [current-Codex host work](host-work.md), and explicitly enabled [adaptive dispatch](adaptive-dispatch.md). Pi RPC and default-workflow rollout remain follow-up work. Protocol tests do not establish a measured speedup.

@@ -176,6 +176,10 @@ Use `--coordinator` when you need to link an older or cross-directory Codex root
 
 ## Source coverage and limits
 
+CAO attempt details include the host/external executor, adaptive resource and selection reasons, observed phase durations, blocked time, and native-child completion evidence when available. The activity row stays compact; open its details for this evidence. Unknown legacy fields remain missing rather than becoming zero. Re-sanitizing collector snapshots at the HTTP boundary preserves these public counters without forwarding private child records.
+
+Phase time includes orchestration and waiting; it is not model thinking time. `reported` child completion is weaker evidence than `verified` hook lifecycle events. A selected adaptive route means a resource was bound to an attempt, not that its candidate or project passed acceptance.
+
 The monitor intentionally scopes itself to the current project by default. Use `--all` only when you explicitly want broader local metadata. Large source sets are bounded; snapshots are capped and may be marked `truncated`.
 
 Known limits:

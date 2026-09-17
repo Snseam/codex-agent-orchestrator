@@ -6,6 +6,10 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Offline paired benchmark evaluation with predeclared experiment identities, separate existing-repository/greenfield cohorts, failure and missing-result denominators, cancellation sensitivity, and all-trial time-to-acceptance percentiles. Example data is synthetic; default adaptive rollout remains disabled.
+- Monitor details for executor, adaptive resource/reasons, phase and blocked durations, and native-child evidence, with compact activity rows and preserved unknown values.
+- Live isolated adaptive validation for Pi/Kimi and Claude/Grok, including an actual Claude Explore child, independent verification, integration and owned-runtime cleanup. This proves those tested paths, not a speedup over direct Codex.
+
 - Opt-in adaptive dispatch (`dispatch --adaptive` or `mode enable --strategy adaptive`) that binds one eligible resource to an attempt, pins retries to that binding, and treats unfinished or unknown native children as blockers. Preference ranking uses completion rate before elapsed time; it is not a live-agent speed or quality guarantee.
 - Optional bounded task briefs and unapplied `route shadow` recommendations with versioned per-conversation preferences. Existing dispatch defaults remain delegated.
 - Current-Codex `host start/report/verify/release/recover` workflow with checkout ownership, explicit stopped reports, bounded retries and independent in-place verification; cancellation does not pretend to stop the App turn.
@@ -39,6 +43,11 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 - Per-agent token metadata in monitor snapshots (`nodes.tokens` / `tokenUsage`) with session/turn/observed scope, source, completeness, and partial/scanned-window handling. These observations are not provider billing, subscription balance, or exact CAO task cost.
 
 ### Fixed
+
+- Restore the preflight-discovered agent directory inside every owned Herdr pane, including PATH discoveries, so login-shell PATH changes do not silently start older agents or Node runtimes.
+- Resolve state-root aliases before resuming attempts, preventing macOS `/var` aliases from breaking telemetry identity checks and cleanup.
+- Release adaptive Claude capacity when startup is cancelled after the worker closes but before an assignment is sent; submitted or still-unknown child work continues to hold capacity.
+- Preserve child counts and timing evidence when the monitor sanitizes a snapshot twice, and distinguish bound adaptive attempts from unapplied shadow advice in recorded route reasons.
 
 - Isolate mock Claude profile smoke runs from user configuration and session history, preventing synthetic `alpha` / `beta` models from appearing in normal model pickers and token reports. Explicit Claude config directories now reach the actual worker bootstrap as well as recorded log roots.
 - Preserve command cancellation escalation after a leader exits, so TERM-resistant descendants are killed before cancellation settles.

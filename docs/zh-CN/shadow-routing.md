@@ -37,4 +37,4 @@ node bin/cao.mjs route shadow --file task.json --thread THREAD_ID --record
 
 明确选择当前 Codex 时使用 `--executor host`；只考虑外部执行器时使用 `--executor external`。仅有 Codex＋checkout 的任务格式不能表达是哪条路径。固定 host 不可用时不会退回外部执行；它只在本次预览覆盖已保存的对话偏好，仍不能与任务中显式指定的外部 profile 冲突。
 
-显式策略使用 mode schema version 2，让旧客户端明确拒绝，而不是悄悄忽略设置；旧版记录继续可读且保持 delegated。此切片尚未开启 `strategy: adaptive`。用户明确选择在当前对话执行时，使用 [host 工作流](host-work.md)。
+显式策略使用 mode schema version 2，让旧客户端明确拒绝，而不是悄悄忽略设置；旧版记录继续可读且保持 delegated。Shadow 建议始终不启动任务；显式选择[自适应派发](adaptive-dispatch.md)才能将候选绑定到实际尝试。用户明确选择在当前对话执行时，使用 [host 工作流](host-work.md)。

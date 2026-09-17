@@ -33,6 +33,35 @@ test('Herdr makes a discovered NVM executable available only in its owned pane',
   assert.equal(env.PATH, emptyPath);
 });
 
+test('Herdr restores a PATH-discovered agent directory before a login shell can select an older runtime', async t => {
+  const { root, bin } = await fixture(t);
+  const environment = { PATH: bin, HOME: root };
+  const calls = [];
+  const herdr = new Herdr({ binary: process.execPath, environment, runner: async argv => {
+    calls.push(argv);
+    return { code: 0, stdout: '{"result":{}}', stderr: '' };
+  } });
+  assert.equal((await herdr.preflight('pi')).agent.discoverySource, 'PATH');
+  await herdr.startAgent('cao-test', 'worker', 'pi', 'pane');
+  const bootstrap = calls.findIndex(argv => argv.includes('run') && argv.some(value => value.includes(`export PATH='${bin}':"$PATH"`)));
+  const confirmation = calls.findIndex(argv => argv.includes('wait-output'));
+  const launch = calls.findIndex(argv => argv.includes('start'));
+  assert.ok(bootstrap >= 0 && bootstrap < confirmation && confirmation < launch);
+  assert.equal(environment.PATH, bin);
+});
+
+test('Herdr does not start the agent when its PATH bootstrap cannot be confirmed', async t => {
+  const { root, bin } = await fixture(t);
+  const calls = [];
+  const herdr = new Herdr({ binary: process.execPath, environment: { PATH: bin, HOME: root }, runner: async argv => {
+    calls.push(argv);
+    return { code: argv.includes('wait-output') ? 1 : 0, stdout: '{"result":{}}', stderr: '' };
+  } });
+  await herdr.preflight('pi');
+  await assert.rejects(herdr.startAgent('cao-test', 'worker', 'pi', 'pane'), { code: 'execution_environment_failed' });
+  assert.equal(calls.some(argv => argv.includes('start')), false);
+});
+
 test('Pi model limits are explicit when declared and price placeholders remain unknown', async t => {
   const { root } = await fixture(t);
   const profile = validateProfile({ id: 'pi-test', agent: 'pi', model: 'configured-model', protocol: 'anthropic', endpoint: 'http://127.0.0.1:1', credential: { type: 'none' }, modelMetadata: { contextWindow: 1000000, maxOutputTokens: 128000 } });

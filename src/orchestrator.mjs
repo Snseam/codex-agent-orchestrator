@@ -52,6 +52,11 @@ export class Orchestrator {
   }
 
   async _loadRun(id) {
+    // init stores canonical owned paths. A later CLI invocation may receive the
+    // same root through a symlink (notably macOS /var -> /private/var).
+    // Use that same identity for telemetry validation and runtime cleanup.
+    try { this.root = await fs.realpath(this.root); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const run = await state.loadRun(this.root, id);
     invariant(run, 'run_not_found', `Run ${id} does not exist.`);
     invariant(run.schemaVersion === 1 && run.id === id && run.tasks && typeof run.project === 'string', 'invalid_run', 'Run record is invalid or uses an unsupported schema.');
@@ -244,6 +249,7 @@ export class Orchestrator {
 
   async _nativeChildren(runId, task, attempt, report) {
     if (!attempt.submissionStartedAt && !attempt.paneId) return { state: 'verified', complete: true, source: 'controller-no-worker-created', children: [], reasons: [] };
+    if (!attempt.submissionStartedAt && attempt.workerClosed) return { state: 'verified', complete: true, source: 'controller-stopped-before-assignment', children: [], reasons: [] };
     const evidence = await checkNativeChildren({ root: this.root, runId, task: this._effectiveTask(task, attempt), attempt, report });
     if (evidence.state === 'unknown' && attempt.routeDecision?.mode !== 'adaptive') return {
       ...evidence, state: 'reported', complete: (report?.children || []).every(child => ['completed', 'cancelled'].includes(child.status)),

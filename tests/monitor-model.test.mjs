@@ -124,3 +124,20 @@ test('re-sanitizing snapshots cannot turn ambiguous or cyclic conversation ances
     assert.ok(second.nodes.every(n => n.conversationId === null));
   }
 });
+
+test('collector-to-server sanitization preserves child counts and timing evidence without private data', () => {
+  const first = publicSnapshot({
+    nodes: [{ id: 'attempt',
+      nativeChildren: { state: 'blocked', complete: false, source: 'claude-hooks', children: [{ id: 'private-child-id', status: 'running' }] },
+      performance: { phase: 'blocked', durationsMs: { execute: 100 }, blockedMs: 20,
+        blocker: { category: 'native_children', secret: 'PRIVATE' }, coverage: { hasLegacyPrehistory: true } },
+    }], projects: [], sources: [], scope: {},
+  }, now);
+  const second = publicSnapshot(first, now);
+  assert.deepEqual(second.nodes[0].nativeChildren, first.nodes[0].nativeChildren);
+  assert.deepEqual(second.nodes[0].performance, first.nodes[0].performance);
+  assert.equal(second.nodes[0].nativeChildren.count, 1);
+  assert.equal(second.nodes[0].performance.blockerCategory, 'native_children');
+  assert.equal(second.nodes[0].performance.legacyPrehistory, true);
+  assert.doesNotMatch(JSON.stringify(second), /private-child-id|PRIVATE/);
+});

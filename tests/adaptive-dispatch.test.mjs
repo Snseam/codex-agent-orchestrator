@@ -36,6 +36,8 @@ test('active native choice pins model/provider, bypasses default profile and com
   assert.deepEqual(launched.task.agentArgs, ['--provider', 'kimi', '--model', 'k3']);
   assert.equal(launched.attempt.execution, undefined);
   assert.equal(launched.attempt.routeDecision.mode, 'adaptive');
+  assert.ok(launched.attempt.routeDecision.reasons.includes('adaptive_bound_to_attempt'));
+  assert.equal(launched.attempt.routeDecision.reasons.includes('shadow_advisory_only_not_dispatched'), false);
   assert.equal((await listReservations(f.stateRoot)).length, 1);
   const result = await new Supervisor({ orchestrator: f.service }).supervise(f.run.id, { integrate: true, waitMs: 10000 });
   assert.equal(result.reason, 'complete');
@@ -215,6 +217,24 @@ test('cancel retains capacity when native children are unfinished', async t => {
   assert.equal(cancelled.attempt.lastError.code, 'native_children_unverified');
   assert.equal(cancelled.attempt.runtimeReleasedAt, undefined);
   assert.equal((await listReservations(f.stateRoot)).length, 1);
+});
+
+test('cancel releases adaptive capacity when the worker stopped before any assignment was sent', async t => {
+  const f = await setup(t, [nativeClaude()]);
+  f.runtime.getProcessInfo = async () => ({ result: { process_info: {} } });
+  const input = { ...f.input, maxChildren: 1 };
+  const launched = await f.dispatcher.dispatch(f.run.id, input, { fixedExecutorKind: 'external' });
+  assert.equal(launched.attempt.status, 'needs_input');
+  assert.ok(launched.attempt.paneId);
+  assert.equal(launched.attempt.submissionStartedAt, null);
+  assert.equal(f.runtime.prompts.length, 0);
+  assert.equal((await listReservations(f.stateRoot)).length, 1);
+  const cancelled = await f.service.cancel(f.run.id, input.id);
+  assert.equal(cancelled.attempt.status, 'cancelled');
+  assert.equal(cancelled.attempt.workerClosed, true);
+  assert.equal(cancelled.attempt.nativeChildren.source, 'controller-stopped-before-assignment');
+  assert.ok(cancelled.attempt.runtimeReleasedAt);
+  assert.deepEqual(await listReservations(f.stateRoot), []);
 });
 
 test('retry keeps the bound adaptive resource instead of re-selecting', async t => {
