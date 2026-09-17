@@ -6,6 +6,9 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Opt-in, budgeted on-demand quick calibration for adaptive task dispatch, with saved conversation preferences, selector-aware candidate filtering, cache reuse and no probes during activation or when an eligible executor is already available.
+- Configuration-bound readiness from independently verified external task deliveries, allowing a normally delegated native login session to establish evidence for later adaptive selection without exporting OAuth credentials. Host work, mock runtime evidence and ambiguous legacy overrides are excluded.
+
 - Offline paired benchmark evaluation with predeclared experiment identities, separate existing-repository/greenfield cohorts, failure and missing-result denominators, cancellation sensitivity, and all-trial time-to-acceptance percentiles. Example data is synthetic; default adaptive rollout remains disabled.
 - Monitor details for executor, adaptive resource/reasons, phase and blocked durations, and native-child evidence, with compact activity rows and preserved unknown values.
 - Live isolated adaptive validation for Pi/Kimi and Claude/Grok, including an actual Claude Explore child, independent verification, integration and owned-runtime cleanup. This proves those tested paths, not a speedup over direct Codex.

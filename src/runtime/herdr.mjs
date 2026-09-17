@@ -106,12 +106,14 @@ function waitForSpawn(child) {
 }
 
 export class Herdr {
-  constructor({ binary = 'herdr', runner = runCommand, environment = process.env, spawner = spawn } = {}) {
+  constructor({ binary = 'herdr', runner = runCommand, environment = process.env, spawner = spawn, evidenceSource = runner === runCommand && spawner === spawn ? 'real' : 'mock' } = {}) {
     this.binary = binary;
     this.runner = runner;
     this.environment = environment;
     this.spawner = spawner;
     this.agentExecutables = new Map();
+    if (!['real', 'mock'].includes(evidenceSource)) throw new OrchestratorError('invalid_evidence_source', 'Runtime evidence source must be real or mock.');
+    this.evidenceSource = evidenceSource;
   }
 
   env() {

@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { main } from '../bin/cao.mjs';
+import { AdaptiveDispatcher } from '../src/adaptive-dispatch.mjs';
+import { enableConversationMode, disableConversationMode } from '../src/conversation-mode.mjs';
+import { task } from './helpers.mjs';
+
+test('one-off adaptive dispatch does not revive disabled conversation probe preferences', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cao-policy-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const thread = 'policy-test';
+  await enableConversationMode({ stateRoot: root, thread, strategy: 'adaptive', calibrationPolicy: 'on-demand', probeBudgetMs: 45000 });
+  const file = path.join(root, 'task.json');
+  await fs.writeFile(file, JSON.stringify(task()));
+  const observed = [];
+  t.mock.method(AdaptiveDispatcher.prototype, 'dispatch', async (_run, _task, options) => { observed.push(options); return {}; });
+  const argv = ['dispatch', '--adaptive', '--run', 'unused-test-run', '--thread', thread, '--file', file, '--state-dir', root];
+  await main(argv);
+  assert.equal(observed.at(-1).calibrationPolicy, 'on-demand');
+  assert.equal(observed.at(-1).probeBudgetMs, 45000);
+  await disableConversationMode({ stateRoot: root, thread });
+  await main(argv);
+  assert.equal(observed.at(-1).calibrationPolicy, 'off');
+  assert.equal(observed.at(-1).probeBudgetMs, 30000);
+  await main([...argv, '--calibration-policy', 'on-demand', '--probe-budget-ms', '10000']);
+  assert.equal(observed.at(-1).calibrationPolicy, 'on-demand');
+  assert.equal(observed.at(-1).probeBudgetMs, 10000);
+});

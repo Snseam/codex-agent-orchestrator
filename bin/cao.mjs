@@ -35,6 +35,7 @@ Usage: node bin/cao.mjs <command> [options]
   validate   --file TASK.json
   dispatch   --run ID --file TASK.json [--adaptive] [--thread ID] [--resources ID,ID]
              [--executor host|external] [--preference balanced|fastest|subscription-first|quality-first]
+             [--calibration-policy off|on-demand] [--probe-budget-ms N]
   preflight  --run ID --file TASK.json (read-only; no model calls)
   supervise  --run ID [--wait-ms 30000] [--poll-ms 1000] [--integrate] [--repair-reports]
   step       --run ID [--integrate] [--repair-reports]
@@ -73,6 +74,7 @@ Usage: node bin/cao.mjs <command> [options]
   mode enable [--thread ID] [--project PATH] [--agent auto|claude|pi|opencode|codex]
              [--profile ID] [--max-parallel N] [--max-attempts N]
              [--strategy delegated|shadow|adaptive] [--preference balanced|fastest|subscription-first|quality-first]
+             [--calibration-policy off|on-demand] [--probe-budget-ms N]
   mode status [--thread ID]
   mode disable [--thread ID]
 
@@ -118,7 +120,7 @@ Task deadlineAt is an optional ISO UTC deadline, enforced while a controller/che
 `;
 
 const optionsByCommand = {
-  init: ['project', 'id', 'max-parallel'], validate: ['file'], dispatch: ['run', 'file', 'adaptive', 'thread', 'resources', 'executor', 'preference'],
+  init: ['project', 'id', 'max-parallel'], validate: ['file'], dispatch: ['run', 'file', 'adaptive', 'thread', 'resources', 'executor', 'preference', 'calibration-policy', 'probe-budget-ms'],
   preflight: ['run', 'file'], supervise: ['run', 'wait-ms', 'poll-ms', 'integrate', 'repair-reports'],
   step: ['run', 'integrate', 'repair-reports'], 'performance report': ['run'],
   'result submit': ['attempt-dir', 'file', 'stdin'],
@@ -141,7 +143,7 @@ const optionsByCommand = {
   'route explain': ['file'], 'route reservations': [],
   'route shadow': ['file', 'thread', 'record', 'resources', 'no-host', 'agent', 'preference', 'executor'],
   'skill install': ['skills-dir'], 'skill status': ['skills-dir'], 'skill uninstall': ['skills-dir'],
-  'mode enable': ['thread', 'project', 'agent', 'profile', 'max-parallel', 'max-attempts', 'strategy', 'preference'],
+  'mode enable': ['thread', 'project', 'agent', 'profile', 'max-parallel', 'max-attempts', 'strategy', 'preference', 'calibration-policy', 'probe-budget-ms'],
   'mode status': ['thread'], 'mode disable': ['thread'],
   'gateway start': ['profile', 'id', 'allow-shared'], 'gateway status': ['id'], 'gateway stop': ['id'], 'gateway list': [],
   'monitor start': ['project', 'run', 'all', 'open', 'id', 'port', 'coordinator', 'codex-home', 'claude-home'],
@@ -264,7 +266,7 @@ export async function main(argv = process.argv.slice(2)) {
     case 'skill install': return installCaoSkill({ skillsDir: o['skills-dir'] });
     case 'skill status': return statusCaoSkill({ skillsDir: o['skills-dir'] });
     case 'skill uninstall': return uninstallCaoSkill({ skillsDir: o['skills-dir'] });
-    case 'mode enable': return enableConversationMode({ stateRoot: profiles.root, thread: o.thread, project: o.project, agent: o.agent, profile: o.profile, maxParallel: o['max-parallel'], maxAttempts: o['max-attempts'], strategy: o.strategy, preference: o.preference });
+    case 'mode enable': return enableConversationMode({ stateRoot: profiles.root, thread: o.thread, project: o.project, agent: o.agent, profile: o.profile, maxParallel: o['max-parallel'], maxAttempts: o['max-attempts'], strategy: o.strategy, preference: o.preference, calibrationPolicy: o['calibration-policy'], probeBudgetMs: o['probe-budget-ms'] });
     case 'mode status': return statusConversationMode({ stateRoot: profiles.root, thread: o.thread });
     case 'mode disable': return disableConversationMode({ stateRoot: profiles.root, thread: o.thread });
     case 'source discover': return discoverCCSwitch({ directory: o.directory });
@@ -364,12 +366,14 @@ export async function main(argv = process.argv.slice(2)) {
       const thread = resolveThreadId(o.thread);
       const mode = await statusConversationMode({ stateRoot: profiles.root, thread });
       if (!o.adaptive && !(mode.enabled && mode.strategy === 'adaptive')) {
-        if (o.resources || o.executor || o.preference) throw new OrchestratorError('invalid_arguments', 'Routing options require --adaptive or an enabled adaptive conversation.');
+        if (o.resources || o.executor || o.preference || o['calibration-policy'] || o['probe-budget-ms']) throw new OrchestratorError('invalid_arguments', 'Routing options require --adaptive or an enabled adaptive conversation.');
         return orchestrator.dispatch(required('run'), input);
       }
       const fixedAgent = mode.enabled && o.executor !== 'host' && mode.agent !== 'auto' ? mode.agent : null;
       return new AdaptiveDispatcher({ orchestrator }).dispatch(required('run'), input, {
         thread, preference: o.preference || mode.preference, fixedExecutorKind: o.executor,
+        calibrationPolicy: o['calibration-policy'] || (mode.enabled ? mode.calibrationPolicy : 'off'),
+        probeBudgetMs: o['probe-budget-ms'] === undefined ? (mode.enabled ? mode.probeBudgetMs : 30000) : Number(o['probe-budget-ms']),
         ...(o.resources === undefined ? {} : { allowedResourceIds: o.resources.split(',') }),
         fixedProfileId: mode.enabled && o.executor !== 'host' ? mode.profile : null, fixedAgent,
       });

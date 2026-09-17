@@ -193,6 +193,14 @@ node bin/cao.mjs cleanup --run demo
 
 ## 执行配置
 
+使用自适应路由时，可显式开启“没有可用候选时按预算补测”：
+
+```bash
+node bin/cao.mjs mode enable --strategy adaptive --calibration-policy on-demand --probe-budget-ms 30000
+```
+
+这条命令只保存当前对话偏好；后续真正派发任务且需要证据时才会运行模型探针。已有合格 host 或外部 Agent 时直接执行。独立验收后的原生任务也可提供就绪证据，无需复制 OAuth 凭据。证据与配置边界见[自适应派发](docs/zh-CN/adaptive-dispatch.md)。
+
 Execution profile 是可选能力。它让 CAO 为每个任务选择原生 agent、模型、上游 endpoint、凭证引用和路由策略，同时不改写全局 provider 文件。Profile 可以手写，也可以从只读 CC Switch 数据库导入。stored secret 从 stdin 或环境变量引用读取；secret 值不会写入 profile JSON。
 
 常用命令：

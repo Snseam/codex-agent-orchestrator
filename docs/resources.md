@@ -11,14 +11,14 @@ node bin/cao.mjs resources check --agent claude,pi
 
 `list` reads configuration and reuses compatible version observations. `check` additionally runs bounded native version/login-status commands and saves sanitized inventory in the CAO state directory. Each command has a two-second timeout within a five-second process-probe budget. Unknown or unsupported metadata stays unknown.
 
-Discovery checks PATH first, then known installation locations and a bounded list of NVM Node versions. It returns the executable path and discovery source. When dispatch preflight finds an agent outside PATH, Herdr's owned pane receives a private PATH bootstrap; shell startup files are not rewritten.
+Discovery checks PATH first, then known installation locations and a bounded list of NVM Node versions. It returns the executable path and discovery source. Herdr's owned pane restores the discovered executable directory before launch, including PATH discoveries, so a login shell cannot silently select an older installation; shell startup files are not rewritten.
 
 ## What a resource means
 
 - `installed`: an executable was found. This does not mean authentication works.
 - `configured`: selected configuration or credential evidence exists. It is not a successful request.
 - `authentication`: evidence from a recognized native status or credential shape; no raw credentials or email are included.
-- `callVerification`: fresh real calibration evidence for the exact resource/configuration fingerprint, or `unknown`/`stale`/`unavailable`.
+- `callVerification`: fresh calibration or independently verified task-delivery evidence for the exact resource/configuration fingerprint, or `unknown`/`stale`/`unavailable`. Inspect `source` to distinguish them.
 - `requestedModel` versus `observedModel`: an alias or proxy mapping is not assumed to be the actual served model.
 - `quota`: declared profile quota hints with freshness. Native package balances that cannot be queried remain unknown.
 - `quotaGroup`: known account identity or a conservative grouping. Matching endpoints alone do not prove two configurations use the same account.
@@ -37,6 +37,12 @@ Use identifiers returned by discovery. Schema-18 Pi provider records with a know
 Pi model limits are imported when present. A managed profile can explicitly declare `modelMetadata: {"contextWindow": 1000000, "maxOutputTokens": 128000}`. Otherwise the existing compatibility values remain labelled as such in the execution manifest. Pi's required numeric price placeholders never establish a free model or actual billing price.
 
 ## Explicit isolated calibration
+
+An external native task can establish readiness without an isolated model probe. CAO records the configuration fingerprint before launch and only publishes `source: verified-task` after an acknowledged assignment, confirmed worker/child completion, and independent checks against the collected snapshot. The current configuration must still match. This demonstrates functional delivery through that configuration, not a separately observed provider request or served-model identity.
+
+Task evidence expires 15 minutes after verification; rereading it does not refresh its age. A newer negative calibration supersedes older successful delivery evidence. Host work, mock runtimes, unverified reports, failed checks, and unknown child completion do not establish readiness. Legacy native tasks with custom CLI arguments or known project configuration/context markers, and legacy managed profiles with possible gateway fallbacks, are conservatively excluded because their actual configuration is not pinned. Project marker checks only inspect known paths in the project and attempt checkout; they do not scan homes or read credentials. Adaptive attempts already carry a pinned selection.
+
+This gives native OAuth sessions a path into subsequent adaptive choices without copying credentials: first complete a normally delegated, independently checked native task using the configured default and no CLI overrides. CAO observes its result; it does not export or convert the login. A cold OAuth resource without this evidence still cannot be actively probed by the API-only isolated adapter.
 
 Choose the exact resource id from `resources list`:
 

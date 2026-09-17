@@ -11,14 +11,14 @@ node bin/cao.mjs resources check --agent claude,pi
 
 `list` 读取配置并复用匹配的版本观测；`check` 额外执行有限时的原生版本/登录状态命令，将脱敏清单保存到 CAO 状态目录。每个命令最多两秒，进程探测总预算五秒。无法确认的信息保持未知。
 
-先检查 PATH，再检查常见安装目录与有数量限制的 NVM Node 版本目录。结果包含执行文件及发现来源。派发预检发现 PATH 外的 Agent 后，只为 Herdr 自己的 pane 增加 PATH，不修改 shell 启动文件。
+先检查 PATH，再检查常见安装目录与有数量限制的 NVM Node 版本目录。结果包含执行文件及发现来源。Herdr 自己的 pane 在启动前恢复已发现可执行文件的目录，包括从 PATH 发现的安装，防止登录 shell 意外选中旧版本；不修改 shell 启动文件。
 
 ## 清单字段
 
 - `installed`：找到可执行文件，不代表登录可用。
 - `configured`：发现模型配置或凭据线索，不代表成功调用。
 - `authentication`：原生状态或可识别凭据形状的证据，不包含密钥和邮箱。
-- `callVerification`：同一配置指纹的真实校准证据，或 unknown/stale/unavailable。
+- `callVerification`：同一配置指纹的校准或独立验收后的任务交付证据，或 unknown/stale/unavailable；通过 `source` 区分来源。
 - `requestedModel` 与 `observedModel`：声明模型和实际观测模型分开，不能假定代理或别名的真实后端。
 - `quota`：profile 声明的额度线索及新鲜度；无法读取的原生套餐余额保持未知。
 - `quotaGroup`：已知账号或保守的分组；相同 endpoint 不能证明是同一个账号。
@@ -37,6 +37,12 @@ node bin/cao.mjs profile import-cc-switch --provider PROVIDER_ID --app pi --id m
 目录中有上下文和输出限制时一并导入。受管 profile 也可显式填写 `modelMetadata: {"contextWindow": 1000000, "maxOutputTokens": 128000}`；缺失时沿用原有兼容值，并在执行 manifest 标明来源。Pi 协议要求的数值价格占位不代表免费或真实账单。
 
 ## 显式校准
+
+外部原生任务可以在不运行隔离探针的情况下建立就绪证据。CAO 在启动前保存配置指纹，只有任务已确认发送、worker 和子代理已结束、收集快照通过独立检查、当前配置仍匹配时，才写入 `source: verified-task`。这说明该配置完成过功能交付，不代表另外观察到 provider 请求或实际服务模型身份。
+
+任务证据在验收后 15 分钟过期，重复读取不会刷新时效；较新的失败校准会覆盖更早的成功交付证据。当前 Codex host、mock 运行、仅报告未验收、检查失败或子代理状态未知都不能建立就绪证据。带自定义 CLI 参数或已知项目配置/上下文标记的传统原生任务，以及可能使用网关 fallback 的传统 managed profile，暂不回流，避免把未固定的实际配置归属给默认配置。项目检查只判断项目及尝试工作目录内有限的已知路径是否存在，不扫描 HOME 或读取凭据。自适应尝试已有固定候选绑定。
+
+这为原生 OAuth 登录会话提供了后续进入自适应选择的路径：先按正常 delegated 流程，使用已配置默认值、无 CLI 覆盖参数完成一个真实任务并独立验收。CAO 只观察结果，不导出或转换登录凭据。没有此类证据的冷启动 OAuth 候选，仍不能通过仅支持 API 认证的隔离校准器主动探测。
 
 从 `resources list` 选择具体资源 ID：
 

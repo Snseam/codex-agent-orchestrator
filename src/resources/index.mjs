@@ -9,6 +9,7 @@ import { writeJsonAtomic } from '../state.mjs';
 import { ProfileStore } from '../profiles.mjs';
 import { CalibrationStore } from '../calibration/store.mjs';
 import { PROBE_ENVIRONMENT } from '../calibration/environment.mjs';
+import { readTaskEvidenceForResource } from './task-evidence.mjs';
 
 const SCHEMA_VERSION = 1;
 const NATIVE_AGENTS = [
@@ -691,6 +692,64 @@ async function readStoredInventory(file) {
   }
 }
 
+function calibrationCallVerification(record, fresh) {
+  return {
+    state: fresh ? (record.checks.some(check => check.id === 'completed-response' && check.passed) ? 'verified' : 'unavailable') : 'stale',
+    suite: record.suiteId,
+    source: 'calibration',
+    observedAt: record.observedAt,
+    expiresAt: record.expiresAt,
+    errorCode: record.errorCode,
+    qualityStatus: record.status,
+  };
+}
+
+function taskEvidenceCallVerification(record, fresh) {
+  return {
+    state: fresh ? 'verified' : 'stale',
+    suite: record.suiteId,
+    source: record.source,
+    observedAt: record.observedAt,
+    expiresAt: record.expiresAt,
+    errorCode: null,
+    qualityStatus: record.qualityStatus,
+  };
+}
+
+function unknownCallVerification() {
+  return { state: 'unknown', suite: null, source: null, observedAt: null, expiresAt: null, errorCode: null, qualityStatus: null };
+}
+
+function selectCallVerification({ calibration, taskEvidence, nowMs }) {
+  const nonFutureTaskEvidence = taskEvidence.filter(record => record.observedAt <= nowMs);
+  const latestTaskEvidence = nonFutureTaskEvidence.at(-1) || null;
+  const calibrationFresh = Boolean(calibration && calibration.observedAt <= nowMs && calibration.expiresAt > nowMs);
+  const calibrationView = calibration ? calibrationCallVerification(calibration, calibrationFresh) : null;
+  const freshNegativeCalibration = calibrationView?.state === 'unavailable' && calibrationFresh;
+  if (freshNegativeCalibration && (!latestTaskEvidence || calibration.observedAt >= latestTaskEvidence.observedAt)) {
+    return { callVerification: calibrationView, observedModel: null };
+  }
+  const taskFresh = Boolean(latestTaskEvidence && latestTaskEvidence.fresh);
+  const taskView = latestTaskEvidence ? taskEvidenceCallVerification(latestTaskEvidence, taskFresh) : null;
+
+  if (calibrationView && taskView) {
+    const useTask = calibration.observedAt > nowMs || taskView.observedAt > calibrationView.observedAt;
+    const selected = useTask ? taskView : calibrationView;
+    return {
+      callVerification: selected,
+      observedModel: selected.source === 'calibration' && selected.state === 'verified' && calibrationFresh ? calibration.servedModel : null,
+    };
+  }
+  if (taskView) return { callVerification: taskView, observedModel: null };
+  if (calibrationView) {
+    return {
+      callVerification: calibrationView,
+      observedModel: calibrationView.state === 'verified' && calibrationFresh ? calibration.servedModel : null,
+    };
+  }
+  return { callVerification: unknownCallVerification(), observedModel: null };
+}
+
 export class ResourceService {
   constructor({ root, home = os.homedir(), environment = process.env, runner = runCommand, now = Date.now, profiles } = {}) {
     invariant(typeof root === 'string' && root.length > 0, 'invalid_resource_service', 'ResourceService requires root.');
@@ -849,16 +908,14 @@ export class ResourceService {
 
     resources.sort((a, b) => a.id.localeCompare(b.id));
     const calibrations = await new CalibrationStore({ root: this.root }).list();
-    for (const resource of resources) {
+    await Promise.all(resources.map(async resource => {
       const record = calibrations.filter(row => row.source === 'real' && row.resourceId === resource.id && row.fingerprint === resource.fingerprint && row.environmentFingerprint === PROBE_ENVIRONMENT && row.suiteVersion === '1').at(-1);
-      const fresh = Boolean(record && record.observedAt <= nowMs && record.expiresAt > nowMs);
-      resource.callVerification = record ? {
-        state: fresh ? (record.checks.some(check => check.id === 'completed-response' && check.passed) ? 'verified' : 'unavailable') : 'stale',
-        suite: record.suiteId, observedAt: record.observedAt, expiresAt: record.expiresAt,
-        errorCode: record.errorCode, qualityStatus: record.status,
-      } : { state: 'unknown', suite: null, observedAt: null, expiresAt: null, errorCode: null, qualityStatus: null };
-      if (fresh && resource.callVerification.state === 'verified') resource.observedModel = record.servedModel;
-    }
+      const evidence = await readTaskEvidenceForResource({ root: this.root, resourceId: resource.id, fingerprint: resource.fingerprint, now: this.now });
+      const matchingTaskEvidence = evidence.record ? [{ ...evidence.record, fresh: evidence.fresh, freshnessReason: evidence.reason }] : [];
+      const selectedEvidence = selectCallVerification({ calibration: record, taskEvidence: matchingTaskEvidence, nowMs });
+      resource.callVerification = selectedEvidence.callVerification;
+      if (selectedEvidence.observedModel) resource.observedModel = selectedEvidence.observedModel;
+    }));
     const inventory = {
       schemaVersion: SCHEMA_VERSION,
       observedAt,

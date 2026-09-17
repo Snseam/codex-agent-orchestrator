@@ -20,6 +20,7 @@ import { validateResult } from './results.mjs';
 import { startHostTask, reportHostTask, releaseHostTask, assertHostOwner } from './host.mjs';
 import { ResourceService } from './resources/index.mjs';
 import { checkNativeChildren } from './native-children.mjs';
+import { recordTaskEvidence } from './resources/task-evidence.mjs';
 
 const time = () => new Date().toISOString();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -33,6 +34,22 @@ const current = record => record.attempts.find(a => a.id === record.currentAttem
 const inside = (parent, child) => child === parent || child.startsWith(parent + path.sep);
 const hashFile = async file => crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } };
+const nativeProjectMarkers = {
+  claude: ['.claude', '.mcp.json', 'CLAUDE.md'],
+  pi: ['.pi', 'AGENTS.md', 'CLAUDE.md'],
+  codex: ['.codex', 'AGENTS.md', 'AGENTS.override.md'],
+  opencode: ['.opencode', 'opencode.json', 'opencode.jsonc', 'AGENTS.md'],
+};
+
+async function hasNativeProjectOverrides(agent, directories) {
+  for (const directory of new Set(directories.filter(Boolean))) {
+    for (const marker of nativeProjectMarkers[agent] || []) {
+      try { await fs.lstat(path.join(directory, marker)); return true; }
+      catch (error) { if (error.code !== 'ENOENT') return true; }
+    }
+  }
+  return false;
+}
 
 export function defaultStateRoot() {
   return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'codex-agent-orchestrator');
@@ -258,6 +275,43 @@ export class Orchestrator {
     return evidence;
   }
 
+  async _observeExecutionResource(run, task, attempt) {
+    // Observe before launch; never infer a past configuration from settings read
+    // after delivery. Legacy arguments and gateway fallbacks may change identity.
+    if (this.herdr.evidenceSource !== 'real') return;
+    let resource = attempt.routeDecision?.resource;
+    if (!resource && (attempt.execution || task.agentArgs.length)) return;
+    if (!resource) {
+      if (await hasNativeProjectOverrides(task.agent, [run.project, attempt.cwd])) return;
+      try { resource = await this.resourceResolver(`native-${task.agent}`); }
+      catch { return; } // Optional feedback must not prevent explicit native work.
+    }
+    if (!resource?.id || !resource.fingerprint || (!resource.installed && !attempt.routeDecision?.resource)) return;
+    const observation = { resourceId: resource.id, fingerprint: resource.fingerprint,
+      observedAt: time(), source: 'execution-config', evidenceSource: this.herdr.evidenceSource === 'real' ? 'real' : 'mock' };
+    attempt.resourceObservation = observation;
+    await this._update(run.id, task.id, attempt.id, a => { a.resourceObservation = observation; });
+  }
+
+  async _recordTaskReadiness(runId, taskId) {
+    const { task, attempt } = await this._attempt(runId, taskId);
+    if (attempt.executorKind === 'host' || !attempt.resourceObservation || attempt.readinessEvidence?.state === 'recorded') return;
+    let feedback;
+    try {
+      const resource = await this.resourceResolver(attempt.resourceObservation.resourceId);
+      if (resource?.fingerprint !== attempt.resourceObservation.fingerprint) feedback = { state: 'skipped', reason: 'resource_configuration_changed' };
+      else {
+        const result = await recordTaskEvidence({ root: this.root, runId, task: task.definition, attempt });
+        feedback = { state: result.recorded ? 'recorded' : 'skipped', reason: result.reason || null };
+      }
+    } catch {
+      // Verification is authoritative. Readiness is a best-effort projection.
+      feedback = { state: 'unavailable', reason: 'task_evidence_write_failed' };
+    }
+    try { await this._update(runId, taskId, attempt.id, a => { a.readinessEvidence = feedback; }); }
+    catch { /* Accepted run state remains authoritative if feedback persistence fails. */ }
+  }
+
   async hostStart(runId, task, options) { return startHostTask(this, runId, task, options); }
   async hostReport(runId, taskId, report, options) { return reportHostTask(this, runId, taskId, report, options); }
   async hostRelease(runId, taskId, options) { return releaseHostTask(this, runId, taskId, options); }
@@ -297,6 +351,7 @@ export class Orchestrator {
         attempt.baseline = await git.snapshot(attempt.cwd);
       }
       await update(a => { a.cwd = attempt.cwd; a.baseline = attempt.baseline; a.baselineTree = attempt.baselineTree; });
+      await this._observeExecutionResource(run, task.definition, attempt);
       await state.writeJsonAtomic(path.join(attempt.directory, 'task.json'), task.definition);
       await state.writeJsonAtomic(path.join(attempt.directory, 'submission.json'), { schemaVersion: 1, id: attempt.id, nonce: attempt.nonce, resultFile: 'result.json' });
       await fs.writeFile(path.join(attempt.directory, 'prompt.txt'), compilePrompt(this._effectiveTask(task.definition, attempt), attempt), { mode: 0o600 });
@@ -712,7 +767,10 @@ export class Orchestrator {
       invariant(['submitted', 'accepted'].includes(attempt.status), 'not_submitted', 'Collect a valid submitted result before verification.');
       invariant(!attempt.outsideScope?.length, 'scope_violation', 'Worker changed files outside its allowed paths.');
       invariant((await git.snapshot(attempt.cwd)).hash === attempt.snapshot.hash, 'candidate_changed', 'Candidate changed since collection; recollect or retry.');
-      if (attempt.status === 'accepted') return this.inspect(runId, taskId);
+      if (attempt.status === 'accepted') {
+        await this._recordTaskReadiness(runId, taskId);
+        return this.inspect(runId, taskId);
+      }
       if (!isHost) {
         await this._closeWorker(run, attempt);
         await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
@@ -746,6 +804,7 @@ export class Orchestrator {
         a.operation.finishedAt = time();
         if (passed && task.definition.isolation === 'worktree') a.patchFile = path.join(attempt.directory, 'candidate.patch');
       });
+      if (passed) await this._recordTaskReadiness(runId, taskId);
       return this.inspect(runId, taskId);
     });
   }

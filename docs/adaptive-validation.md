@@ -23,8 +23,10 @@ The browser check used actual successful run metadata, in English and Chinese, a
 
 ## Remaining evidence and rollout
 
+A follow-up on 2026-09-18 verified two additional isolated Pi/Kimi workflows: a cold adaptive dispatch performed one budgeted quick probe before delivering the task, and a normally delegated native task published `verified-task` readiness after independent acceptance. A subsequent read-only adaptive selection accepted that delivery evidence without a probe. The first Pi startup wrote changelog metadata to its isolated settings; that fingerprint change correctly prevented attributing its task to the earlier configuration. Reuse was validated with stable settings. OAuth evidence reuse is covered by offline credential-shape tests, not a live OAuth subscription test. All owned sessions and isolated credential copies were cleaned up; native user configurations and normal history were unchanged.
+
 Adaptive remains opt-in. The live checks above do not establish cross-agent quality rankings, latency savings, full cancellation/fault coverage for every provider, Pi native subagent support, or project-wide completion-rate improvements. Pi child completion still uses the labelled report contract. Larger real tasks, controlled repair/cancellation scenarios and matched existing-repository/greenfield trials remain release work.
 
 Use the [paired evaluator](benchmark-evaluation.md) to account for predeclared trials, including failures and missing results. It is an offline statistics tool, not an agent runner or evidence authenticator. Do not import these three smoke successes as the planned multi-task pilot or enable adaptive by default from them.
 
-Rollback for new work is `node bin/cao.mjs mode enable --strategy delegated` in the relevant conversation. Running attempts keep their original route binding; changing the strategy does not stop or replace them. Continue their normal verification or explicit cancellation/cleanup.
+Rollback for new work is `node bin/cao.mjs mode enable --strategy delegated --calibration-policy off` in the relevant conversation. Running attempts keep their original route binding; changing the strategy does not stop or replace them. Continue their normal verification or explicit cancellation/cleanup.

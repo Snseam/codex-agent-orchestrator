@@ -15,7 +15,9 @@ test('CLI exposes help and validates command arguments', () => {
   assert.equal(parseArgs(['result', 'submit', '--attempt-dir', '/tmp/attempt', '--stdin']).command, 'result submit');
   assert.deepEqual(parseArgs(['supervise', '--run', 'r', '--integrate', '--repair-reports']).values, { run: 'r', integrate: true, 'repair-reports': true });
   assert.equal(parseArgs(['dispatch', '--run', 'r', '--file', 't.json', '--adaptive']).values.adaptive, true);
+  assert.equal(parseArgs(['dispatch', '--run', 'r', '--file', 't.json', '--adaptive', '--calibration-policy', 'on-demand', '--probe-budget-ms', '12000']).values['calibration-policy'], 'on-demand');
   assert.equal(parseArgs(['mode', 'enable', '--strategy', 'adaptive', '--preference', 'fastest']).values.strategy, 'adaptive');
+  assert.equal(parseArgs(['mode', 'enable', '--strategy', 'adaptive', '--calibration-policy', 'on-demand']).values['calibration-policy'], 'on-demand');
   assert.throws(() => parseArgs(['supervise', '--integrate=true']), /takes no value/);
   assert.throws(() => parseArgs(['step', '--run', 'r', '--wait-ms', '4']), /Unknown option/);
   const r = spawnSync(process.execPath, ['bin/cao.mjs', 'unknown'], { encoding: 'utf8' });

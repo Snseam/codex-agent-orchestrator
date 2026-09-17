@@ -54,6 +54,30 @@ test('duplicate active requests do not create another worker even after readines
   await assert.rejects(f.dispatcher.dispatch(f.run.id, { ...f.input, maxAttempts: 20 }), e => e.code === 'task_conflict');
 });
 
+test('duplicate on-demand adaptive requests reuse the bound attempt without another probe', async t => {
+  const f = await fixture(); t.after(f.remove);
+  const runtime = new FakeHerdr();
+  let current = [nativeResource({ callVerification: { state: 'unknown', qualityStatus: null, observedAt: null, expiresAt: null }, probe: { supported: true } })];
+  const resources = { discover: async () => ({ resources: current }), get: async id => current.find(r => r.id === id) };
+  let probes = 0;
+  const calibrationRunner = { run: async request => {
+    probes++;
+    assert.deepEqual(request.resourceIds, ['native-pi-kimi']);
+    current = [nativeResource({ probe: { supported: true } })];
+    return { results: [{ cached: false, record: { status: 'passed', errorCode: null } }] };
+  } };
+  const service = new Orchestrator({ stateRoot: f.stateRoot, herdr: runtime, coordinatorId: 'owner', resourceResolver: resources.get });
+  const run = await service.init({ project: f.project });
+  const dispatcher = new AdaptiveDispatcher({ orchestrator: service, resources, calibrationRunner });
+  const input = task({ agent: 'auto', brief: { risk: 'low', taskKind: 'bugfix', independent: true } });
+  const first = await dispatcher.dispatch(run.id, input, { fixedExecutorKind: 'external', calibrationPolicy: 'on-demand' });
+  assert.equal(probes, 1);
+  assert.equal(first.attempt.routeDecision.evidence.preparation.result, 'selected_after_probe');
+  resources.discover = async () => { throw new Error('duplicate must not rediscover or probe'); };
+  assert.equal((await dispatcher.dispatch(run.id, input, { fixedExecutorKind: 'external', calibrationPolicy: 'on-demand' })).duplicate, true);
+  assert.equal(probes, 1);
+});
+
 test('adaptive host choice registers checkout and retains independent acceptance', async t => {
   const f = await setup(t, []);
   const input = { ...f.input, brief: { risk: 'high', contextDependency: 'high' } }; delete input.agent;
@@ -62,6 +86,84 @@ test('adaptive host choice registers checkout and retains independent acceptance
   await fs.writeFile(path.join(f.project, 'src/math.mjs'), 'export const add=(a,b)=>a+b;');
   await f.service.hostReport(f.run.id, input.id, { taskId: input.id, attemptId: start.attempt.id, nonce: start.attempt.nonce, status: 'submitted', summary: 'fixed', changedFiles: ['src/math.mjs'], checks: [], children: [], unresolved: [], hostStopped: true });
   assert.equal((await f.service.hostVerify(f.run.id, input.id)).attempt.status, 'accepted');
+});
+
+test('on-demand calibration probes missing readiness once and replans before dispatch', async t => {
+  let probed = false;
+  const unavailable = nativeResource({
+    callVerification: { state: 'unknown', suite: null, observedAt: null, expiresAt: null, errorCode: null, qualityStatus: null },
+    probe: { supported: true },
+  });
+  const verified = nativeResource({
+    callVerification: { state: 'verified', qualityStatus: 'passed', observedAt: Date.now() - 1000, expiresAt: Date.now() + 60000 },
+    probe: { supported: true },
+  });
+  const f = await setup(t, []);
+  const resources = {
+    discover: async () => ({ resources: [probed ? verified : unavailable] }),
+    get: async id => (id === unavailable.id ? verified : null),
+  };
+  f.service.resourceResolver = resources.get;
+  const probes = [];
+  const dispatcher = new AdaptiveDispatcher({
+    orchestrator: f.service,
+    resources,
+    calibrationRunnerFactory: () => ({
+      run: async options => {
+        probes.push(options);
+        probed = true;
+        return { schemaVersion: 1, suite: 'quick', source: 'mock', results: [{ record: { status: 'passed' } }], wallMs: 12 };
+      },
+    }),
+  });
+
+  const launched = await dispatcher.dispatch(f.run.id, f.input, { fixedExecutorKind: 'external', calibrationPolicy: 'on-demand', probeBudgetMs: 12000 });
+  assert.equal(f.runtime.starts, 1);
+  assert.equal(launched.task.agent, 'pi');
+  assert.equal(launched.attempt.routeDecision.evidence.preparation.policy, 'on-demand');
+  assert.equal(launched.attempt.routeDecision.evidence.preparation.result, 'selected_after_probe');
+  assert.deepEqual(launched.attempt.routeDecision.evidence.preparation.attempts.map(attempt => attempt.resourceId), ['native-pi-kimi']);
+  assert.equal(probes.length, 1);
+  assert.deepEqual(probes[0].resourceIds, ['native-pi-kimi']);
+  assert.ok(probes[0].budgetMs > 0 && probes[0].budgetMs <= 12000);
+});
+
+test('default calibration policy stays off and does not probe before host fallback', async t => {
+  const f = await setup(t, [nativeResource({
+    callVerification: { state: 'unknown', suite: null, observedAt: null, expiresAt: null, errorCode: null, qualityStatus: null },
+    probe: { supported: true },
+  })]);
+  let probes = 0;
+  const dispatcher = new AdaptiveDispatcher({
+    orchestrator: f.service,
+    resources: f.resources,
+    calibrationRunnerFactory: () => ({ run: async () => { probes++; throw new Error('unexpected probe'); } }),
+  });
+  const launched = await dispatcher.dispatch(f.run.id, f.input);
+  assert.equal(launched.attempt.executorKind, 'host');
+  assert.equal(probes, 0);
+  assert.equal(launched.attempt.routeDecision.evidence.preparation, undefined);
+});
+
+test('on-demand preparation checks closed runs before spending probe budget', async t => {
+  const f = await setup(t, [nativeResource({
+    callVerification: { state: 'unknown', suite: null, observedAt: null, expiresAt: null, errorCode: null, qualityStatus: null },
+    probe: { supported: true },
+  })]);
+  await f.service.cleanup(f.run.id);
+  let probes = 0;
+  const dispatcher = new AdaptiveDispatcher({
+    orchestrator: f.service,
+    resources: f.resources,
+    calibrationRunnerFactory: () => ({ run: async () => { probes++; throw new Error('unexpected probe'); } }),
+  });
+  await assert.rejects(
+    dispatcher.dispatch(f.run.id, f.input, { fixedExecutorKind: 'external', calibrationPolicy: 'on-demand' }),
+    error => error.code === 'adaptive_route_unavailable'
+      && error.details.decision.evidence.preparation.result === 'preflight_blocked'
+      && error.details.decision.evidence.preparation.reason === 'run_closed',
+  );
+  assert.equal(probes, 0);
 });
 
 test('configuration drift refuses launch instead of claiming the old resource was used', async t => {

@@ -193,6 +193,14 @@ By default, commands return JSON, with errors on stderr; `--help` prints usage. 
 
 ## Execution profiles
 
+For adaptive routing, you can opt into bounded preparation when no eligible resource is ready:
+
+```bash
+node bin/cao.mjs mode enable --strategy adaptive --calibration-policy on-demand --probe-budget-ms 30000
+```
+
+This saves a conversation preference. Model probes run only during a later task dispatch that needs them; an already eligible host or external agent proceeds immediately. Independently verified native task deliveries can also supply readiness without copying OAuth credentials. See [adaptive dispatch](docs/adaptive-dispatch.md) for evidence and configuration limits.
+
 Execution profiles are optional. They let CAO select a native agent, model, upstream endpoint, credential reference, and routing policy per task while keeping global provider files unchanged. Profiles can be authored directly or imported from a read-only CC Switch database. Stored secrets are read from stdin or environment references; secret values are never stored in profile JSON.
 
 Useful commands:
