@@ -19,7 +19,7 @@ test('publicSnapshot exposes only browser contract fields and strips sensitive t
   }, now);
 
   assert.deepEqual(Object.keys(snapshot.nodes[0]).sort(), [
-    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'observedAt',
+    'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'executorKind', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'observedAt',
     'parentId', 'performance', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
   ].sort());
   const serialized = JSON.stringify(snapshot);

@@ -178,6 +178,17 @@ export class Supervisor {
     const task = { definition: before.task };
     const expired = isExpired(attempt, task, this.now());
 
+    if (attempt.executorKind === 'host') {
+      if (expired && ['running', 'needs_input', 'submitted'].includes(attempt.status)) {
+        await this.orchestrator.cancel(runId, taskId, { reason: 'deadline' });
+        events.push({ type: 'task.attention', taskId, attemptId: attempt.id, reason: 'host_stop_required' });
+      } else if (attempt.status === 'submitted') {
+        const result = await this.orchestrator.hostVerify(runId, taskId);
+        events.push({ type: 'task.verified', taskId, attemptId: attempt.id, to: result.attempt.status });
+      } else if (attempt.status !== 'accepted') events.push({ type: 'task.attention', taskId, attemptId: attempt.id, reason: 'host_report_required' });
+      return;
+    }
+
     if (expired && shouldCancelForDeadline(attempt)) {
       try {
         const result = await this.orchestrator.cancel(runId, taskId, { reason: 'deadline' });
@@ -249,6 +260,7 @@ export class Supervisor {
       attemptId: attempt?.id || null,
       status: attempt?.status || 'missing',
       isolation: task.definition.isolation,
+      executorKind: attempt?.executorKind || 'external',
       deadlineAt,
       expired: deadlineAt ? Date.parse(deadlineAt) <= this.now() : false,
       workerClosed: Boolean(attempt?.workerClosed),
@@ -283,6 +295,9 @@ export class Supervisor {
 
   #attentionFor(snapshot) {
     const items = [];
+    if (snapshot.executorKind === 'host' && !['accepted', 'submitted'].includes(snapshot.status)) {
+      items.push({ key: `${snapshot.taskId}:${snapshot.attemptId}:host`, taskId: snapshot.taskId, attemptId: snapshot.attemptId, reason: 'host_report_or_stop_required' });
+    }
     if (HOLD.has(snapshot.status)) {
       items.push({ key: `${snapshot.taskId}:${snapshot.attemptId}:${snapshot.status}`, taskId: snapshot.taskId, attemptId: snapshot.attemptId, reason: snapshot.status });
     }

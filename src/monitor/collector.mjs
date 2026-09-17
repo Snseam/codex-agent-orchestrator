@@ -44,6 +44,7 @@ function taskNode(run, task, attempt, now) {
   return {
     id: caoNodeId(run.id, task.definition.id, attempt.id), parentId: coordinator ? `codex:${coordinator}` : null,
     agent: attempt.execution?.agent || task.definition.agent, kind: 'agent',
+    executorKind: attempt.executorKind || 'external',
     label: `${task.definition.id} · ${attempt.number || 1}`, role: task.definition.role || 'implementer',
     model: attempt.execution?.model || null, projectId: run.project, runId: run.id, taskId: task.definition.id,
     attemptId: attempt.id, nativeSessionId: attempt.nativeSession?.id || attempt.telemetry?.nativeSessionId || null,
@@ -52,7 +53,7 @@ function taskNode(run, task, attempt, now) {
     delivery: ['submitted', 'accepted', 'integrated', 'rework'].includes(attempt.status) ? attempt.status : null,
     startedAt: attempt.createdAt, updatedAt: run.updatedAt,
     finishedAt: terminalStates.has(attempt.status) ? attempt.integration?.finishedAt || attempt.verification?.finishedAt || run.updatedAt : null,
-    observedAt: new Date(now).toISOString(), stale: false, source: 'cao', confidence: 'observed', relation: 'cao', tokens: null,
+    observedAt: new Date(now).toISOString(), stale: false, source: 'cao', confidence: attempt.executorKind === 'host' ? 'reported' : 'observed', relation: 'cao', tokens: null,
   };
 }
 

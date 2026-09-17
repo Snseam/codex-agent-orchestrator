@@ -4,6 +4,8 @@ import { OrchestratorError, invariant } from './errors.mjs';
 import { readJson, validateId, withLock, writeJsonAtomic } from './state.mjs';
 
 const AGENTS = new Set(['auto', 'claude', 'pi', 'opencode', 'codex']);
+const STRATEGIES = new Set(['delegated', 'shadow']);
+const PREFERENCES = new Set(['balanced', 'fastest', 'subscription-first', 'quality-first']);
 
 function modeError(code, message, details = {}) {
   return new OrchestratorError(code, message, details);
@@ -97,6 +99,14 @@ function parsePositiveInteger(value, field, max) {
 
 async function normalizedUpdates(options) {
   const updates = {};
+  if (options.strategy !== undefined) {
+    invariant(STRATEGIES.has(options.strategy), 'invalid_arguments', 'strategy must be delegated or shadow; active adaptive routing is not enabled.');
+    updates.strategy = options.strategy;
+  }
+  if (options.preference !== undefined) {
+    invariant(PREFERENCES.has(options.preference), 'invalid_arguments', 'Invalid routing preference.');
+    updates.preference = options.preference;
+  }
   if (options.agent !== undefined) {
     invariant(AGENTS.has(options.agent), 'invalid_arguments', '--agent must be auto, claude, pi, opencode, or codex.', { agent: options.agent });
     updates.agent = options.agent;
@@ -130,9 +140,11 @@ function validateStoredRecord(record, threadId) {
   if (!isPlainObject(record)) {
     throw modeError('mode_state_invalid', 'Mode state must be a JSON object.');
   }
-  if (record.schemaVersion !== 1) {
+  if (![1, 2].includes(record.schemaVersion)) {
     throw modeError('mode_state_invalid', 'Mode state uses an unsupported schema version.', { schemaVersion: record.schemaVersion });
   }
+  if (record.schemaVersion === 2) invariant(STRATEGIES.has(record.strategy) && PREFERENCES.has(record.preference), 'mode_state_invalid', 'Invalid strategy/preference in version 2 mode.');
+  else invariant(record.strategy === undefined && record.preference === undefined, 'mode_state_invalid', 'Strategy preferences require mode schema version 2.');
   if (record.threadId !== threadId) {
     throw modeError('mode_thread_mismatch', 'Mode state belongs to a different thread.', { expected: threadId, actual: record.threadId });
   }
@@ -151,7 +163,7 @@ function validateStoredRecord(record, threadId) {
   const createdAt = typeof record.createdAt === 'string' ? record.createdAt : null;
   const updatedAt = typeof record.updatedAt === 'string' ? record.updatedAt : null;
   return {
-    schemaVersion: 1,
+    schemaVersion: record.schemaVersion,
     threadId,
     enabled: record.enabled,
     project,
@@ -161,6 +173,7 @@ function validateStoredRecord(record, threadId) {
     maxAttempts,
     createdAt,
     updatedAt,
+    ...(record.schemaVersion === 2 ? { strategy: record.strategy, preference: record.preference } : {}),
   };
 }
 
@@ -170,6 +183,7 @@ function emptyStatus(root, threadId, identityAvailable) {
     threadId,
     identityAvailable,
     enabled: false,
+    strategy: 'delegated', preference: 'balanced',
     project: null,
     agent: null,
     profile: null,
@@ -183,10 +197,11 @@ function emptyStatus(root, threadId, identityAvailable) {
 function publicStatus(root, threadId, record) {
   const source = record || {};
   return {
-    schemaVersion: 1,
+    schemaVersion: source.schemaVersion ?? 1,
     threadId,
     identityAvailable: true,
     enabled: source.enabled ?? false,
+    strategy: source.strategy ?? 'delegated', preference: source.preference ?? 'balanced',
     project: source.project ?? null,
     agent: source.agent ?? null,
     profile: source.profile ?? null,
@@ -205,19 +220,20 @@ export async function statusConversationMode({ stateRoot, thread, env = process.
   return publicStatus(stateRoot, threadId, validateStoredRecord(record, threadId));
 }
 
-export async function enableConversationMode({ stateRoot, thread, project, agent, profile, maxParallel, maxAttempts, env = process.env } = {}) {
+export async function enableConversationMode({ stateRoot, thread, project, agent, profile, maxParallel, maxAttempts, strategy, preference, env = process.env } = {}) {
   const threadId = resolveThreadId(thread, env);
   invariant(threadId, 'thread_unavailable', 'Pass --thread or run inside a Codex conversation with CODEX_THREAD_ID/CODEX_SESSION_ID set.');
   validateThreadId(threadId);
-  const updates = await normalizedUpdates({ project, agent, profile, maxParallel, maxAttempts });
+  const updates = await normalizedUpdates({ project, agent, profile, maxParallel, maxAttempts, strategy, preference });
   if (updates.project) await assertStateOutsideProject(stateRoot, updates.project);
   const file = conversationFile(stateRoot, threadId);
   const lock = path.join(conversationDirectory(stateRoot, threadId), '.lock');
   return withLock(lock, async () => {
     const existing = validateStoredRecord(await readJson(file, { optional: true }), threadId);
     await assertStateOutsideProject(stateRoot, updates.project ?? existing?.project ?? null);
+    const upgraded = existing?.schemaVersion === 2 || strategy !== undefined || preference !== undefined;
     const record = {
-      schemaVersion: 1,
+      schemaVersion: upgraded ? 2 : 1,
       threadId,
       enabled: true,
       project: existing?.project ?? null,
@@ -226,6 +242,7 @@ export async function enableConversationMode({ stateRoot, thread, project, agent
       maxParallel: existing?.maxParallel ?? 2,
       maxAttempts: existing?.maxAttempts ?? 3,
       createdAt: existing?.createdAt ?? now(),
+      ...(upgraded ? { strategy: existing?.strategy ?? 'delegated', preference: existing?.preference ?? 'balanced' } : {}),
       ...updates,
       updatedAt: now(),
     };
@@ -243,7 +260,7 @@ export async function disableConversationMode({ stateRoot, thread, env = process
   return withLock(lock, async () => {
     const existing = validateStoredRecord(await readJson(file, { optional: true }), threadId);
     const record = {
-      schemaVersion: 1,
+      schemaVersion: existing?.schemaVersion ?? 1,
       threadId,
       enabled: false,
       project: existing?.project ?? null,
@@ -253,6 +270,7 @@ export async function disableConversationMode({ stateRoot, thread, env = process
       maxAttempts: existing?.maxAttempts ?? 3,
       createdAt: existing?.createdAt ?? now(),
       updatedAt: now(),
+      ...(existing?.schemaVersion === 2 ? { strategy: existing.strategy, preference: existing.preference } : {}),
     };
     await writeJsonAtomic(file, record);
     return publicStatus(stateRoot, threadId, record);

@@ -65,4 +65,4 @@ node /absolute/path/to/cao/bin/cao.mjs result submit --attempt-dir /absolute/att
 
 已提交的 `run.json` 是权威记录。`events.jsonl` 中新增的 `performance.observed` 带 schema、稳定 event id、序号和可用的控制器 epoch；附加日志失败时标 coverage 不完整，旧事件仍兼容。性能报告不输出完整 prompt、provider 配置、nonce 或终端正文。
 
-前台监督属于优化第一阶段；[资源发现与隔离校准](resources.md) 也已可用。自适应任务选择、当前 Codex host lane 和 Pi RPC 仍是后续工作；协议测试不作为真实提速证据。
+前台监督属于优化第一阶段；[资源发现与隔离校准](resources.md)、[shadow 调度](shadow-routing.md) 和 [当前 Codex host 工作流](host-work.md) 也已可用。正式自适应派发和 Pi RPC 仍是后续工作；协议测试不作为真实提速证据。

@@ -42,6 +42,7 @@ export function publicNode(node, observedAt) {
   return {
     id: cleanText(node.id, 256), parentId: cleanText(node.parentId, 256),
     agent: agents.has(node.agent) ? node.agent : 'unknown',
+    executorKind: ['host', 'external'].includes(node.executorKind) ? node.executorKind : null,
     kind: ['coordinator', 'agent', 'subagent'].includes(node.kind) ? node.kind : 'agent',
     label: cleanText(node.label) || 'Agent', role: cleanText(node.role, 80), model: cleanText(node.model, 120),
     conversationTitle: cleanText(node.conversationTitle, 120),

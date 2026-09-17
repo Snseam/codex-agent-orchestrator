@@ -288,6 +288,8 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
 | [Supervision and performance](docs/supervision.md) | Foreground controller, preflight, report submission, deadlines and timing evidence |
 | [Resources and calibration](docs/resources.md) | Native/NVM discovery, CC Switch Pi profiles, isolated probes and cached evidence |
+| [Task briefs and shadow routing](docs/shadow-routing.md) | Advisory choices, conversation preferences and evidence limits |
+| [Current-Codex host work](docs/host-work.md) | Register, report and independently verify in-place work without an external session |
 | [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
 | [CAO Codex skill](docs/codex-skill.md) | One-prompt installation, `/CAO` activation, conversation preferences, and updates |
 | [Changelog](CHANGELOG.md) | Release history |

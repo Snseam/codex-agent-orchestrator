@@ -14,6 +14,8 @@ Request native collaboration through `nativeInstructions` only when the selected
 
 ## Drive the CLI to acceptance
 
+If `mode status` reports `strategy: shadow`, call `route shadow --file TASK.json --thread THREAD_ID --record` before ordinary dispatch. Resource discovery here is read-only; calibration is not automatic. Record the recommendation and its evidence gaps, then keep the user's existing agent/profile selection. Do not apply a recommendation solely because it selected a different executor. Use optional task `brief` for acceptance notes, context references, known findings, risk and independence; executable `checks` still decide candidate acceptance.
+
 1. Inspect a recorded active run before creating another. `init --project ABS_PATH --max-parallel N` creates a run and an owned Herdr session. Generate a task file with the conversation's configured agent/profile and `maxAttempts`; `validate --file TASK.json` checks it. `dispatch --run RUN --file TASK.json` reserves and submits once.
 2. `collect --run RUN --task TASK --wait-ms 30000` waits for evidence. `inspect --output` reads the worker when needed. Terminal idle, a final chat sentence, and a transport acknowledgement do not prove acceptance.
 3. On `needs_input`, inspect the precise terminal output and error. Resolve only what existing authorization covers. Use `input --keys ...` or `input --text-file ...` for that inspected interaction. `resume` reconciles the same attempt without resending an acknowledged assignment. If a worker is idle without a report, request the current attempt's report instead of replaying the implementation task.
@@ -31,3 +33,16 @@ Request native collaboration through `nativeInstructions` only when the selected
 - Worktrees and file scopes coordinate writes; they are not a filesystem sandbox. Choose checks appropriate for the target repository and preserve existing authorization boundaries.
 
 Report delivered behavior, independent verification, actual external sessions/repair attempts, and remaining limitations. Retain run/task IDs and evidence paths for the conversation's next turn.
+
+## Work in the current Codex conversation
+
+Use this path when the user chooses current-Codex execution for the task. It does not start another Codex CLI and is not an automatic fallback from external failure.
+
+If previewing this explicit choice through shadow routing, pass `route shadow --executor host`; `agent: codex` plus checkout isolation alone also describes a valid external Codex task. An explicit host choice never falls back to an external executor. It overrides the saved per-conversation external preference for that preview only, but cannot contradict an execution profile explicitly supplied in the task.
+
+1. Create or reuse the run, then `host start --run RUN --file TASK.json --thread THREAD_ID`. Omit external execution/profile/agent arguments from the task; the host path uses Codex and checkout isolation. Wait for successful registration before editing; it captures the baseline and holds the project against other CAO writers.
+2. Work within the returned scope. When editing and all owned native children have stopped, prepare the normal result JSON with current taskId/attemptId/nonce and `hostStopped: true`. Report all actual children. Submit with `host report --run RUN --task TASK --file REPORT.json --thread THREAD_ID`.
+3. Run `host verify` with the same identity. Only independent checks can mark the candidate accepted. It is an in-place delivery: never apply a patch to the same checkout again. Project-level acceptance remains your responsibility.
+4. For `rework`, use `host start --retry` with the same task definition to register another bounded attempt before editing; it retains the original baseline and changes the nonce. For cancellation, stop your work and owned children, then `host release --ack-stopped`; use `--children-file` with a complete array when child status needs updating. Changed checkout holds remain until `host recover` rechecks the retained edits.
+
+CAO cannot terminate the current App turn. `cancel` requests a stop; it does not prove the host stopped or release its checkout. Never acknowledge stopped work while a child or verifier can still write. The thread id is a correlation/ownership check within the local workflow, not a separate authentication boundary.

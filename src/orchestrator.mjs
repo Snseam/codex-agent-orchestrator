@@ -17,12 +17,14 @@ import { prepareClaudeTelemetry } from './monitor/claude.mjs';
 import { trackAttempt, summarizeRun } from './performance/index.mjs';
 import { preflightProject } from './preflight.mjs';
 import { validateResult } from './results.mjs';
+import { startHostTask, reportHostTask, releaseHostTask, assertHostOwner } from './host.mjs';
 
 const time = () => new Date().toISOString();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const active = new Set(['integrating', 'preparing', 'launching', 'ready', 'sending', 'running', 'uncertain', 'needs_input', 'submitted', 'verifying', 'cancelling']);
 const integrationHold = a => ['integrating', 'integration_failed', 'integration_cancelled'].includes(a.status) || (a.status === 'cancelling' && a.operation?.kind === 'integration');
 const checkoutHold = t => t.definition.isolation === 'checkout' && !['accepted', 'integrated'].includes(current(t).status) && !current(t).checkoutReleased;
+const stopped = a => a.executorKind === 'host' ? Boolean(a.hostStoppedEvidence) : a.workerClosed;
 const missing = error => ['agent_not_found', 'agent_not_running', 'pane_not_found'].includes(error.code);
 const serializeError = e => ({ code: e.code || 'error', message: e.message, details: e.details || {} });
 const current = record => record.attempts.find(a => a.id === record.currentAttempt);
@@ -134,7 +136,7 @@ export class Orchestrator {
     });
   }
 
-  async _reserve(runId, definition, feedback, retry = false) {
+  async _reserve(runId, definition, feedback, retry = false, { executorKind = 'external', ownerThreadId = null } = {}) {
     const initial = await this._loadRun(runId);
     const key = crypto.createHash('sha256').update(initial.project).digest('hex');
     return state.withLock(path.join(this.root, 'locks', `project-${key}`), () => this._change(runId, async run => {
@@ -143,21 +145,26 @@ export class Orchestrator {
       const digest = taskDigest(definition);
       if (record && !retry) {
         invariant(record.digest === digest, 'task_conflict', 'Task ID already exists with a different definition.');
+        invariant((current(record).executorKind || 'external') === executorKind, 'executor_conflict', 'Task belongs to a different execution path.');
+        if (executorKind === 'host') invariant(current(record).ownerThreadId === ownerThreadId, 'host_owner_mismatch', 'Host task belongs to another conversation.');
         return { duplicate: true, task: structuredClone(record), run: structuredClone(run) };
       }
       if (retry) {
         invariant(record, 'task_not_found', 'Cannot retry a missing task.');
+        invariant(record.digest === digest, 'task_conflict', 'A retry must preserve the original task definition and limits.');
         invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(current(record).status), 'attempt_active', 'Collect, verify or cancel the current attempt before retrying.');
         invariant(record.attempts.length < definition.maxAttempts, 'attempt_limit', 'The configured attempt limit was reached.');
-        invariant(current(record).workerClosed || !current(record).paneId, 'worker_not_stopped', 'The previous worker must be confirmed stopped before retrying.');
+        invariant((current(record).executorKind || 'external') === executorKind, 'executor_conflict', 'Retry must use the original execution path.');
+        invariant(executorKind === 'host' ? stopped(current(record)) : (current(record).workerClosed || !current(record).paneId), 'worker_not_stopped', 'The previous worker must be confirmed stopped before retrying.');
+        if (executorKind === 'host') invariant(current(record).ownerThreadId === ownerThreadId, 'host_owner_mismatch', 'Host task belongs to another conversation.');
       }
       for (const dependency of definition.dependsOn) {
         const predecessor = Object.hasOwn(run.tasks, dependency) ? run.tasks[dependency] : null;
         invariant(predecessor && ['accepted', 'integrated'].includes(current(predecessor).status), 'dependency_not_ready', `Dependency ${dependency} is not accepted.`);
         invariant(current(predecessor).status === 'integrated' || definition.isolation === 'checkout', 'dependency_not_integrated', `Integrate ${dependency} before creating a dependent worktree.`);
       }
-      const count = Object.values(run.tasks).filter(t => active.has(current(t).status)).length;
-      invariant(count < run.maxParallel, 'capacity_exceeded', 'Run capacity reached. Collect and verify or cancel existing work.');
+      const count = Object.values(run.tasks).filter(t => current(t).executorKind !== 'host' && active.has(current(t).status)).length;
+      invariant(executorKind === 'host' || count < run.maxParallel, 'capacity_exceeded', 'Run capacity reached. Collect and verify or cancel existing work.');
       for (const other of await state.listRuns(this.root)) {
         if (other.project !== run.project) continue;
         invariant(!Object.values(other.tasks || {}).some(t => integrationHold(current(t))), 'integration_recovery_required', 'The project has an incomplete integration. Inspect and recover it before starting new work.');
@@ -188,6 +195,12 @@ export class Orchestrator {
         coordinatorThreadId: this.coordinatorId,
         ...(definition.deadlineAt ? { deadlineAt: definition.deadlineAt } : {}),
       };
+      if (executorKind === 'host') {
+        Object.assign(attempt, { executorKind, ownerThreadId, deliveryMode: 'in-place', status: 'running',
+          cwd: run.project, baseline: previous?.baseline || await git.snapshot(run.project), hostStoppedEvidence: null,
+          coordinatorThreadId: ownerThreadId });
+        for (const field of ['workerName', 'paneId', 'terminalId', 'workerClosed', 'launcherPid', 'launcherHost', 'launchFinishedAt', 'submissionStartedAt']) delete attempt[field];
+      }
       record ||= { definition, digest, attempts: [] };
       record.attempts.push(attempt);
       record.currentAttempt = id;
@@ -222,6 +235,15 @@ export class Orchestrator {
 
   async performance(runId) {
     return summarizeRun(await this._loadRun(runId));
+  }
+
+  async hostStart(runId, task, options) { return startHostTask(this, runId, task, options); }
+  async hostReport(runId, taskId, report, options) { return reportHostTask(this, runId, taskId, report, options); }
+  async hostRelease(runId, taskId, options) { return releaseHostTask(this, runId, taskId, options); }
+  async hostVerify(runId, taskId, { thread } = {}) {
+    const { attempt } = await this._attempt(runId, taskId);
+    assertHostOwner(this, attempt, thread);
+    return this.verify(runId, taskId, { hostThread: thread || this.coordinatorId });
   }
 
   async _cancelCheck(runId, taskId, { ignoreDeadline = false } = {}) {
@@ -358,6 +380,7 @@ export class Orchestrator {
 
   async _releaseRuntime(runId, taskId, attemptId) {
     const { attempt } = await this._attempt(runId, taskId);
+    if (attempt.executorKind === 'host') return;
     if ((!attempt.execution && !attempt.telemetry) || attempt.runtimeReleasedAt) return;
     invariant(attempt.id === attemptId && attempt.workerClosed, 'worker_not_stopped', 'Stop the worker before releasing its execution resources.');
     try {
@@ -466,6 +489,7 @@ export class Orchestrator {
 
   async input(runId, taskId, { keys, text } = {}) {
     const { run, attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Host work is controlled by its conversation; there is no terminal to address.');
     invariant(!attempt.workerClosed && attempt.paneId, 'worker_not_running', 'No live worker to address.');
     invariant(!attempt.cancelRequested && !['submitted', 'verifying', 'accepted', 'integrated'].includes(attempt.status), 'input_not_allowed', 'Input is disabled after submission or cancellation.');
     await this._assertIdentity(run, attempt);
@@ -478,6 +502,7 @@ export class Orchestrator {
 
   async resume(runId, taskId) {
     const { run, attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Use host report, host verify, or host start --retry for host work.');
     invariant(!integrationHold(attempt), 'integration_recovery_required', 'Use recover to recheck the current checkout without applying the patch again.');
     invariant(attempt.status !== 'verifying' && !(attempt.status === 'cancelling' && attempt.operation?.kind === 'verification'), 'verification_in_progress', 'Verification owns this candidate. Inspect its process and evidence before recovery; resume never resubmits or reruns these checks.');
     if (!attempt.paneId && ['preparing', 'cancelling'].includes(attempt.status) && attempt.launcherHost === os.hostname() && !alive(attempt.launcherPid)) {
@@ -503,7 +528,8 @@ export class Orchestrator {
   }
 
   async requestReport(runId, taskId) {
-    await this._attempt(runId, taskId);
+    const { attempt: target } = await this._attempt(runId, taskId);
+    invariant(target.executorKind !== 'host', 'host_command_required', 'Host work reports through host report.');
     return state.withLock(path.join(state.runPath(this.root, runId), `verify-${taskId}.lock`), async () => {
       const { run, task, attempt } = await this._attempt(runId, taskId);
       if (attempt.reportRequest) return { ...(await this.inspect(runId, taskId)), duplicate: true };
@@ -531,7 +557,8 @@ export class Orchestrator {
   }
 
   async collect(runId, taskId, { waitMs = 0 } = {}) {
-    await this._attempt(runId, taskId);
+    const { attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Host work submits via host report, not terminal collection.');
     return state.withLock(path.join(state.runPath(this.root, runId), `verify-${taskId}.lock`), () => this._collect(runId, taskId, { waitMs }));
   }
 
@@ -617,17 +644,24 @@ export class Orchestrator {
     catch (error) { if (error.code !== 'pane_not_found') throw error; }
   }
 
-  async verify(runId, taskId, { recovery = false } = {}) {
+  async verify(runId, taskId, { recovery = false, hostThread = null } = {}) {
     await this._attempt(runId, taskId);
     return state.withLock(path.join(state.runPath(this.root, runId), `verify-${taskId}.lock`), async () => {
       const { run, task, attempt } = await this._attempt(runId, taskId);
+      const isHost = attempt.executorKind === 'host';
+      if (isHost) {
+        assertHostOwner(this, attempt, hostThread);
+        invariant(attempt.hostStoppedEvidence, 'host_not_stopped', 'The host must report that all editing has stopped.');
+      }
       invariant(['submitted', 'accepted'].includes(attempt.status), 'not_submitted', 'Collect a valid submitted result before verification.');
       invariant(!attempt.outsideScope?.length, 'scope_violation', 'Worker changed files outside its allowed paths.');
       invariant((await git.snapshot(attempt.cwd)).hash === attempt.snapshot.hash, 'candidate_changed', 'Candidate changed since collection; recollect or retry.');
       if (attempt.status === 'accepted') return this.inspect(runId, taskId);
-      await this._closeWorker(run, attempt);
-      await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
-      await this._releaseRuntime(runId, taskId, attempt.id);
+      if (!isHost) {
+        await this._closeWorker(run, attempt);
+        await this._update(runId, taskId, attempt.id, a => { a.workerClosed = true; });
+        await this._releaseRuntime(runId, taskId, attempt.id);
+      }
       await this._update(runId, taskId, attempt.id, a => { invariant(!a.cancelRequested, 'cancel_requested', 'Verification was cancelled.'); a.status = 'verifying'; a.operation = { kind: 'verification', pid: process.pid, host: os.hostname(), finishedAt: null }; });
       const checks = [];
       let validationError;
@@ -684,6 +718,7 @@ export class Orchestrator {
 
   async retry(runId, taskId, feedback = '') {
     const { run, task, attempt } = await this._attempt(runId, taskId);
+    invariant(attempt.executorKind !== 'host', 'host_command_required', 'Use host start --retry to continue host implementation.');
     invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(attempt.status), 'attempt_active', 'Verify or cancel before retrying.');
     if (attempt.paneId && !attempt.workerClosed) {
       await this._closeWorker(run, attempt);
@@ -714,6 +749,7 @@ export class Orchestrator {
       a.cancelRequested = true; a.status = 'cancelling'; a.cancelReason ||= reason;
       if (reason === 'deadline') a.deadlineExceededAt ||= time();
     });
+    if (attempt.executorKind === 'host') return this.inspect(runId, taskId);
     if (['verifying', 'integrating'].includes(attempt.status)) return this.inspect(runId, taskId);
     try {
       await this._closeWorker(run, attempt);
@@ -777,19 +813,20 @@ export class Orchestrator {
     return this.inspect(run.id, task.definition.id);
   }
 
-  async recover(runId, taskId) {
+  async recover(runId, taskId, { hostThread = null } = {}) {
     const { run } = await this._attempt(runId, taskId);
     const key = crypto.createHash('sha256').update(run.project).digest('hex');
     return state.withLock(path.join(this.root, 'locks', `project-${key}`), async () => {
       const { task, attempt } = await this._attempt(runId, taskId);
+      if (attempt.executorKind === 'host') assertHostOwner(this, attempt, hostThread);
       if (task.definition.isolation === 'checkout') {
-        invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(attempt.status) && attempt.workerClosed, 'not_recoverable', 'Stop the failed checkout worker before rechecking the project.');
+        invariant(['rework', 'failed', 'interrupted', 'cancelled'].includes(attempt.status) && stopped(attempt), 'not_recoverable', 'Stop the failed checkout worker before rechecking the project.');
         invariant(attempt.baseline?.files, 'recovery_evidence_missing', 'Checkout baseline is missing.');
         const candidate = await git.snapshot(run.project);
         const changed = git.changedPaths(attempt.baseline, candidate);
         invariant(!outsideScope(changed, task.definition.allowedPaths).length, 'scope_violation', 'Checkout contains changes outside the task scope.');
         await this._update(runId, taskId, attempt.id, a => { a.snapshot = candidate; a.changedPaths = changed; a.outsideScope = []; a.cancelRequested = false; a.status = 'submitted'; });
-        return this.verify(runId, taskId, { recovery: true });
+        return this.verify(runId, taskId, { recovery: true, hostThread });
       }
       invariant(integrationHold(attempt), 'not_recoverable', 'recover rechecks incomplete integrations only. It never replays a worker or applies a patch.');
       invariant(attempt.operation?.finishedAt || (attempt.operation?.host === os.hostname() && !alive(attempt.operation.pid)), 'operation_alive', 'The original integration controller may still be running.');
@@ -814,8 +851,11 @@ export class Orchestrator {
       const attempt = current(task);
       if (attempt.workerClosed) await this._releaseRuntime(runId, task.definition.id, attempt.id);
     }
-    await this.herdr.stopServer(run.herdrSession);
-    await this._change(runId, r => { r.serverStoppedAt = time(); });
-    return { runId, serverStopped: true, retained: 'Worktrees, task records and evidence are retained. No project files were removed.' };
+    const hasRuntime = Boolean(Object.values(run.tasks).some(t => t.attempts.some(a => a.executorKind !== 'host')) || run.server);
+    if (hasRuntime) {
+      await this.herdr.stopServer(run.herdrSession);
+      await this._change(runId, r => { r.serverStoppedAt = time(); });
+    }
+    return { runId, serverStopped: hasRuntime, retained: 'Worktrees, task records and evidence are retained. No project files were removed.' };
   }
 }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { OrchestratorError } from './errors.mjs';
 import { validateId } from './state.mjs';
 import { validateExecution } from './routing.mjs';
+import { validateBrief } from './task-brief.mjs';
 
 const KNOWN_KEYS = new Set([
   'id',
@@ -19,6 +20,7 @@ const KNOWN_KEYS = new Set([
   'dependsOn',
   'execution',
   'deadlineAt',
+  'brief',
 ]);
 
 const AGENTS = new Set(['claude', 'pi', 'opencode', 'codex', 'auto']);
@@ -226,6 +228,7 @@ export function validateTask(object) {
     dependsOn,
     ...(execution ? { execution } : {}),
     ...(deadlineAt ? { deadlineAt } : {}),
+    ...(object.brief === undefined ? {} : { brief: validateBrief(object.brief) }),
   };
 }
 

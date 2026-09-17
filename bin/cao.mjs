@@ -18,7 +18,8 @@ import { MonitorManager, openMonitor } from '../src/monitor/manager.mjs';
 import { loadRun } from '../src/state.mjs';
 import { getProjectInfo } from '../src/git.mjs';
 import { installCaoSkill, statusCaoSkill, uninstallCaoSkill } from '../src/skills.mjs';
-import { disableConversationMode, enableConversationMode, statusConversationMode } from '../src/conversation-mode.mjs';
+import { disableConversationMode, enableConversationMode, statusConversationMode, resolveThreadId } from '../src/conversation-mode.mjs';
+import { explainShadowRoute, recordShadowDecision } from '../src/shadow-routing.mjs';
 import { Supervisor } from '../src/supervisor/index.mjs';
 import { submitResult, MAX_RESULT_BYTES } from '../src/results.mjs';
 import { ResourceService } from '../src/resources/index.mjs';
@@ -37,6 +38,11 @@ Usage: node bin/cao.mjs <command> [options]
   step       --run ID [--integrate] [--repair-reports]
   performance report --run ID
   result submit --attempt-dir PATH (--file REPORT.json | --stdin)
+  host start --run ID --file TASK.json [--thread ID] [--retry]
+  host report --run ID --task ID --file REPORT.json [--thread ID]
+  host verify --run ID --task ID [--thread ID]
+  host release --run ID --task ID --ack-stopped [--children-file PATH] [--thread ID]
+  host recover --run ID --task ID [--thread ID]
   resources list [--agent claude,pi,codex,opencode] [--home PATH]
   resources check [--agent claude,pi,codex,opencode] [--home PATH]
   calibrate --resource ID[,ID] [--quick | --suite quick|code] [--refresh]
@@ -64,6 +70,7 @@ Usage: node bin/cao.mjs <command> [options]
   skill uninstall [--skills-dir PATH]
   mode enable [--thread ID] [--project PATH] [--agent auto|claude|pi|opencode|codex]
              [--profile ID] [--max-parallel N] [--max-attempts N]
+             [--strategy delegated|shadow] [--preference balanced|fastest|subscription-first|quality-first]
   mode status [--thread ID]
   mode disable [--thread ID]
 
@@ -87,6 +94,8 @@ Usage: node bin/cao.mjs <command> [options]
   secret set --id ID --stdin
   secret remove --id ID
   route explain --file TASK.json
+  route shadow --file TASK.json [--thread ID] [--record] [--resources ID,ID] [--no-host] [--executor host|external]
+             [--agent claude|pi|codex|opencode] [--preference balanced|fastest|subscription-first|quality-first]
   route reservations
   gateway start --profile ID [--id ID] [--allow-shared]
   gateway status --id ID
@@ -111,6 +120,9 @@ const optionsByCommand = {
   preflight: ['run', 'file'], supervise: ['run', 'wait-ms', 'poll-ms', 'integrate', 'repair-reports'],
   step: ['run', 'integrate', 'repair-reports'], 'performance report': ['run'],
   'result submit': ['attempt-dir', 'file', 'stdin'],
+  'host start': ['run', 'file', 'thread', 'retry'], 'host report': ['run', 'task', 'file', 'thread'],
+  'host verify': ['run', 'task', 'thread'], 'host release': ['run', 'task', 'thread', 'ack-stopped', 'children-file'],
+  'host recover': ['run', 'task', 'thread'],
   'resources list': ['agent', 'home'], 'resources check': ['agent', 'home'],
   calibrate: ['resource', 'quick', 'suite', 'refresh', 'timeout-ms', 'budget-ms', 'home'],
   'calibration list': ['resource'], 'calibration release': ['reservation', 'confirm-stopped'],
@@ -125,15 +137,16 @@ const optionsByCommand = {
   'profile export': ['id', 'file'], 'profile import-cc-switch': ['directory', 'provider', 'app', 'id', 'model', 'allow-shared'],
   'profile refresh': ['id', 'model'], 'secret set': ['id', 'stdin'], 'secret remove': ['id'],
   'route explain': ['file'], 'route reservations': [],
+  'route shadow': ['file', 'thread', 'record', 'resources', 'no-host', 'agent', 'preference', 'executor'],
   'skill install': ['skills-dir'], 'skill status': ['skills-dir'], 'skill uninstall': ['skills-dir'],
-  'mode enable': ['thread', 'project', 'agent', 'profile', 'max-parallel', 'max-attempts'],
+  'mode enable': ['thread', 'project', 'agent', 'profile', 'max-parallel', 'max-attempts', 'strategy', 'preference'],
   'mode status': ['thread'], 'mode disable': ['thread'],
   'gateway start': ['profile', 'id', 'allow-shared'], 'gateway status': ['id'], 'gateway stop': ['id'], 'gateway list': [],
   'monitor start': ['project', 'run', 'all', 'open', 'id', 'port', 'coordinator', 'codex-home', 'claude-home'],
   'monitor status': ['id'], 'monitor stop': ['id'],
   'monitor snapshot': ['project', 'run', 'all', 'coordinator', 'codex-home', 'claude-home'],
 };
-const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor', 'skill', 'mode', 'performance', 'result', 'resources', 'calibration']);
+const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor', 'skill', 'mode', 'performance', 'result', 'resources', 'calibration', 'host']);
 
 export function parseArgs(argv) {
   const values = {};
@@ -147,7 +160,7 @@ export function parseArgs(argv) {
     }
     const [name, ...inlineParts] = token.slice(2).split('=');
     if (Object.hasOwn(values, name)) throw new OrchestratorError('invalid_arguments', `Duplicate option: --${name}`);
-    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open', 'integrate', 'repair-reports', 'quick', 'refresh', 'confirm-stopped'].includes(name)) {
+    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open', 'integrate', 'repair-reports', 'quick', 'refresh', 'confirm-stopped', 'retry', 'ack-stopped', 'record', 'no-host'].includes(name)) {
       if (inlineParts.length) throw new OrchestratorError('invalid_arguments', `--${name} takes no value`);
       values[name] = true;
     } else {
@@ -192,6 +205,32 @@ export async function main(argv = process.argv.slice(2)) {
     return { project, runId: o.run || null, all: !!o.all, coordinatorId: o.coordinator || (o.run ? null : process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null), coordinatorExplicit: Boolean(o.coordinator), codexHome: o['codex-home'], claudeHome: o['claude-home'] };
   };
   switch (command) {
+    case 'host start': return orchestrator.hostStart(required('run'), await readProfile(required('file')), { thread: o.thread, retry: !!o.retry });
+    case 'host report': {
+      const file = required('file'), info = await fs.lstat(path.resolve(file));
+      if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_RESULT_BYTES) throw new OrchestratorError('invalid_result', 'Report must be a regular file of at most 128 KiB.');
+      return orchestrator.hostReport(...taskArgs(), await readProfile(file), { thread: o.thread });
+    }
+    case 'host verify': return orchestrator.hostVerify(...taskArgs(), { thread: o.thread });
+    case 'host release': return orchestrator.hostRelease(...taskArgs(), { thread: o.thread, ackStopped: !!o['ack-stopped'], ...(o['children-file'] ? { children: await readProfile(o['children-file']) } : {}) });
+    case 'host recover': return orchestrator.recover(...taskArgs(), { hostThread: resolveThreadId(o.thread) });
+    case 'route shadow': {
+      const input = await readProfile(required('file'));
+      const task = validateTask(input);
+      const thread = resolveThreadId(o.thread);
+      const mode = await statusConversationMode({ stateRoot: profiles.root, thread });
+      const inventory = await new ResourceService({ root: profiles.root }).discover();
+      const requestedAgent = o.agent || (mode.enabled && o.executor !== 'host' ? mode.agent : null) || (input.agent && input.agent !== 'auto' ? input.agent : null);
+      const decision = await explainShadowRoute({ task, inventory, preference: o.preference || mode.preference,
+        fixedExecutorKind: o.executor,
+        hostAvailable: !o['no-host'], ...(o.resources === undefined ? {} : { allowedResourceIds: o.resources.split(',') }),
+        fixedProfileId: mode.enabled && o.executor !== 'host' ? mode.profile : null,
+        fixedAgent: requestedAgent === 'auto' ? null : requestedAgent,
+      });
+      if (!o.record) return decision;
+      if (!thread) throw new OrchestratorError('thread_unavailable', '--record requires the current conversation id.');
+      return recordShadowDecision(profiles.root, thread, decision);
+    }
     case 'resources list':
     case 'resources check': return new ResourceService({ root: profiles.root, ...(o.home ? { home: path.resolve(o.home) } : {}) }).discover({ check: command.endsWith('check'), ...(o.agent ? { agents: o.agent.split(',') } : {}) });
     case 'calibration list': return { records: await new CalibrationStore({ root: profiles.root }).list({ resourceId: o.resource }) };
@@ -223,7 +262,7 @@ export async function main(argv = process.argv.slice(2)) {
     case 'skill install': return installCaoSkill({ skillsDir: o['skills-dir'] });
     case 'skill status': return statusCaoSkill({ skillsDir: o['skills-dir'] });
     case 'skill uninstall': return uninstallCaoSkill({ skillsDir: o['skills-dir'] });
-    case 'mode enable': return enableConversationMode({ stateRoot: profiles.root, thread: o.thread, project: o.project, agent: o.agent, profile: o.profile, maxParallel: o['max-parallel'], maxAttempts: o['max-attempts'] });
+    case 'mode enable': return enableConversationMode({ stateRoot: profiles.root, thread: o.thread, project: o.project, agent: o.agent, profile: o.profile, maxParallel: o['max-parallel'], maxAttempts: o['max-attempts'], strategy: o.strategy, preference: o.preference });
     case 'mode status': return statusConversationMode({ stateRoot: profiles.root, thread: o.thread });
     case 'mode disable': return disableConversationMode({ stateRoot: profiles.root, thread: o.thread });
     case 'source discover': return discoverCCSwitch({ directory: o.directory });

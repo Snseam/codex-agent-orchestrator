@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { renderBrief } from './task-brief.mjs';
 
 export const capabilities = {
   claude: {
@@ -74,6 +75,7 @@ export function compilePrompt(task, attempt) {
 
 Task:
 ${task.objective}
+${task.brief ? `\n${renderBrief(task.brief)}\n` : ''}
 
 Task metadata:
 - taskId: ${task.id}

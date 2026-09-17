@@ -6,6 +6,10 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Optional bounded task briefs and unapplied `route shadow` recommendations with versioned per-conversation preferences. Existing dispatch defaults remain delegated.
+- Current-Codex `host start/report/verify/release/recover` workflow with checkout ownership, explicit stopped reports, bounded retries and independent in-place verification; cancellation does not pretend to stop the App turn.
+- English/Chinese host and shadow-routing guides, updated CAO skill guidance, and host/external executor metadata in monitor snapshots.
+
 - Native/managed `resources list/check`, including NVM installations, distinct Pi provider/model candidates, configuration fingerprints, quota freshness and cached call-verification evidence.
 - Explicit isolated Claude/Pi `calibrate` quick/code suites, bounded model calls, private temporary configuration, independent code checks and real/mock-aware evidence caching. These probes are not production harness or overall quality benchmarks.
 - CC Switch schema-18 Pi API-provider discovery and reference import, explicit Pi model metadata, and labelled unknown price/compatibility metadata.

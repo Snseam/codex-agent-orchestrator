@@ -73,4 +73,4 @@ node bin/cao.mjs calibration release --reservation RESERVATION_ID --confirm-stop
 
 This command cannot release a regular task reservation. Normal interruption/timeout waits for child termination and releases capacity automatically.
 
-Resource/calibration commands are usable now. They do not yet change task selection automatically: task handoff, adaptive routing and default-workflow rollout are the next slices.
+Resource/calibration commands are usable now. [Task briefs and shadow routing](shadow-routing.md) consume this evidence for advisory choices; [host work](host-work.md) supports an explicitly selected current-Codex path. Automatic adaptive dispatch and default-workflow rollout remain follow-up work.
