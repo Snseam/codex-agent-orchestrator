@@ -171,6 +171,7 @@ function classifyProvider(row, proxy, directory) {
   let credentialField = null;
   let secretRef = null;
   let requiresGateway = false;
+  let models = [];
 
   if (!supportedApps.has(appType)) reasons.push('unsupported_app');
 
@@ -192,6 +193,21 @@ function classifyProvider(row, proxy, directory) {
     } else {
       reasons.push('missing_api_credential');
     }
+  } else if (appType === 'pi') {
+    protocol = { 'anthropic-messages': 'anthropic', 'openai-responses': 'openai-responses', 'openai-completions': 'openai-chat' }[settings.api] || null;
+    endpoint = safeUrl(settings.baseUrl);
+    models = (Array.isArray(settings.models) ? settings.models : []).filter(m => typeof m?.id === 'string' && m.id.length && m.id.length <= 256 && !/[\x00-\x1f]/.test(m.id)).map(m => ({
+      id: m.id,
+      ...(Number.isSafeInteger(m.contextWindow) && m.contextWindow > 0 && m.contextWindow <= 4000000 && Number.isSafeInteger(m.maxTokens) && m.maxTokens > 0 && m.maxTokens <= m.contextWindow
+        ? { contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens } : {}),
+    }));
+    model = models[0]?.id || null;
+    if (typeof settings.apiKey === 'string' && settings.apiKey.length && !settings.apiKey.startsWith('!') && !settings.apiKey.includes('$')) {
+      authKind = 'pi-api'; credentialField = 'apiKey';
+      secretRef = makeSecretRef({ directory, app: appType, providerId, field: credentialField });
+    } else reasons.push('unsupported_pi_credential_reference');
+    if (!protocol) reasons.push('unsupported_protocol');
+    if (!model) reasons.push('missing_model');
   } else if (appType === 'codex') {
     protocol = 'openai-responses';
     model = 'codex';
@@ -220,6 +236,7 @@ function classifyProvider(row, proxy, directory) {
     credentialField,
     sharedProxyEndpoint,
     proxy: proxyPublic,
+    ...(appType === 'pi' ? { models } : {}),
   };
 
   return {
@@ -241,6 +258,7 @@ function classifyProvider(row, proxy, directory) {
     sharedProxyAvailable: Boolean(sharedProxyEndpoint),
     proxyEndpoint: sharedProxyEndpoint,
     fingerprint: sha(publicConfig),
+    ...(appType === 'pi' ? { models } : {}),
   };
 }
 
@@ -296,7 +314,7 @@ export async function resolveCCSwitchSecret(refOrInput) {
   const app = safeIdentifier(input.app, 'app', 64);
   const providerId = safeIdentifier(input.providerId, 'providerId');
   invariant(typeof directory === 'string' && directory.length > 0, 'invalid_secret_ref', 'CC Switch secret reference is missing directory.');
-  invariant(secretFields.includes(field), 'invalid_secret_ref', 'CC Switch secret reference uses an unsupported field.');
+  invariant((app === 'claude' && secretFields.includes(field)) || (app === 'pi' && field === 'apiKey'), 'invalid_secret_ref', 'CC Switch secret reference uses an unsupported field.');
 
   const location = dbPath(directory);
   invariant(!location.missing, 'secret_not_found', 'CC Switch secret reference is not available.');
@@ -309,8 +327,9 @@ export async function resolveCCSwitchSecret(refOrInput) {
     requireColumns(providerColumns, ['id', 'app_type', 'settings_config']);
     const row = db.prepare('SELECT settings_config FROM providers WHERE id = ? AND app_type = ?').get(providerId, app);
     invariant(row, 'cc_switch_provider_not_found', 'CC Switch provider was not found.');
-    const env = parseJson(row.settings_config).env || {};
-    const value = env[field];
+    const settings = parseJson(row.settings_config);
+    const value = app === 'pi' ? settings.apiKey : (settings.env || {})[field];
+    if (app === 'pi') invariant(typeof value === 'string' && !value.startsWith('!') && !value.includes('$'), 'invalid_secret_ref', 'Executable or environment Pi key expressions are not direct credentials.');
     return safeSecretValue(value);
   } finally {
     db?.close();
@@ -325,6 +344,8 @@ export async function importCCSwitchProfile({ directory, providerId, app, id, mo
   invariant(provider, 'cc_switch_provider_not_found', 'CC Switch provider was not found.');
 
   if (provider.supported) {
+    const selectedModel = app === 'pi' ? provider.models.find(m => m.id === (model || provider.model)) : null;
+    if (app === 'pi') invariant(selectedModel, 'cc_switch_model_not_found', 'Selected model is not in this Pi provider catalog.');
     return {
       id: id || `${app}-${sha({ app, providerId }).slice(0, 16)}`,
       name: `${provider.name}`,
@@ -344,6 +365,7 @@ export async function importCCSwitchProfile({ directory, providerId, app, id, mo
       costPerMillion: null,
       modelMap: {},
       fallbacks: [],
+      ...(selectedModel?.contextWindow ? { modelMetadata: { contextWindow: selectedModel.contextWindow, maxOutputTokens: selectedModel.maxOutputTokens } } : {}),
     };
   }
 

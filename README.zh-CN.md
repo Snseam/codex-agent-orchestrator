@@ -101,6 +101,8 @@ dispatch → collect → verify → integrate
 
 每个阶段由明确的 CLI 命令驱动。派发成功不等于任务完成：`collect` 需要当前尝试的有效结果文件，`verify` 独立运行检查，不以 Agent 自报成功作为验收结论。
 
+对已有任务，可用 `supervise --run RUN_ID` 在前台自动推进收集与验收；添加 `--integrate` 允许整合补丁，添加 `--repair-reports` 允许每个 attempt 一次报告补交。`performance report --run RUN_ID` 查询阶段耗时和结果覆盖。截止时间与恢复边界见[监督与性能记录](docs/zh-CN/supervision.md)。
+
 ## 快速开始
 
 ### 1. 准备环境
@@ -284,6 +286,8 @@ npm run smoke -- --live           # 受控失败 → 修复 → 集成
 | [执行配置与路由](docs/zh-CN/execution-profiles.md) | Profile CRUD、secret、CC Switch 导入、路由、gateway 生命周期 |
 | [本地 Agent Monitor](docs/zh-CN/monitor.md) | CAO、Codex、Claude metadata 的只读本地看板 |
 | [任务状态与恢复](docs/zh-CN/states.md) | 结果契约、重试、交互、checkout 与集成阻塞 |
+| [监督与性能记录](docs/zh-CN/supervision.md) | 前台控制器、预检、报告提交、截止时间和耗时证据 |
+| [资源发现与校准](docs/zh-CN/resources.md) | 原生/NVM 安装发现、CC Switch Pi 配置、隔离探针和缓存 |
 | [Token 用量报告](docs/zh-CN/usage.md) | 可选 Tokscale 集成、JSON 形状与归属边界 |
 | [CAO Codex 技能](docs/zh-CN/codex-skill.md) | 复制指令安装、`/CAO` 启用、对话偏好和更新 |
 | [更新日志](CHANGELOG.md) | 版本变化 |

@@ -19,6 +19,11 @@ import { loadRun } from '../src/state.mjs';
 import { getProjectInfo } from '../src/git.mjs';
 import { installCaoSkill, statusCaoSkill, uninstallCaoSkill } from '../src/skills.mjs';
 import { disableConversationMode, enableConversationMode, statusConversationMode } from '../src/conversation-mode.mjs';
+import { Supervisor } from '../src/supervisor/index.mjs';
+import { submitResult, MAX_RESULT_BYTES } from '../src/results.mjs';
+import { ResourceService } from '../src/resources/index.mjs';
+import { CalibrationStore } from '../src/calibration/store.mjs';
+import { CalibrationRunner, releaseCalibrationReservation } from '../src/calibration/runner.mjs';
 
 export const help = `Codex Agent Orchestrator (CAO) 0.1.0
 
@@ -27,6 +32,17 @@ Usage: node bin/cao.mjs <command> [options]
   init       --project PATH [--id ID] [--max-parallel 4]
   validate   --file TASK.json
   dispatch   --run ID --file TASK.json
+  preflight  --run ID --file TASK.json (read-only; no model calls)
+  supervise  --run ID [--wait-ms 30000] [--poll-ms 1000] [--integrate] [--repair-reports]
+  step       --run ID [--integrate] [--repair-reports]
+  performance report --run ID
+  result submit --attempt-dir PATH (--file REPORT.json | --stdin)
+  resources list [--agent claude,pi,codex,opencode] [--home PATH]
+  resources check [--agent claude,pi,codex,opencode] [--home PATH]
+  calibrate --resource ID[,ID] [--quick | --suite quick|code] [--refresh]
+             [--timeout-ms N] [--budget-ms N] [--home PATH]
+  calibration list [--resource ID]
+  calibration release --reservation ID --confirm-stopped
   status     [--run ID]
   inspect    --run ID --task ID [--output]
   collect    --run ID --task ID [--wait-ms 45000]
@@ -65,7 +81,7 @@ Usage: node bin/cao.mjs <command> [options]
   profile remove --id ID
   profile default [--id ID | --clear]
   profile export --id ID [--file PATH]
-  profile import-cc-switch --provider ID --app claude --id ID
+  profile import-cc-switch --provider ID --app claude|pi --id ID
              [--directory PATH] [--model MODEL] [--allow-shared]
   profile refresh --id ID [--model MODEL]
   secret set --id ID --stdin
@@ -85,10 +101,19 @@ usage queries local token records through optional Tokscale; scoped attribution 
 Profiled tasks use isolated runtime settings; existing global provider files are not rewritten.
 monitor serves an authenticated, localhost-only status page; stopping it never stops agents.
 No automatic commits, pushes, or plugin installation.
+supervise is a bounded foreground controller; no background watchdog runs between calls.
+Only --integrate applies patches; --repair-reports permits one report-only request per attempt.
+Task deadlineAt is an optional ISO UTC deadline, enforced while a controller/check is active.
 `;
 
 const optionsByCommand = {
   init: ['project', 'id', 'max-parallel'], validate: ['file'], dispatch: ['run', 'file'],
+  preflight: ['run', 'file'], supervise: ['run', 'wait-ms', 'poll-ms', 'integrate', 'repair-reports'],
+  step: ['run', 'integrate', 'repair-reports'], 'performance report': ['run'],
+  'result submit': ['attempt-dir', 'file', 'stdin'],
+  'resources list': ['agent', 'home'], 'resources check': ['agent', 'home'],
+  calibrate: ['resource', 'quick', 'suite', 'refresh', 'timeout-ms', 'budget-ms', 'home'],
+  'calibration list': ['resource'], 'calibration release': ['reservation', 'confirm-stopped'],
   status: ['run'], inspect: ['run', 'task', 'output'], collect: ['run', 'task', 'wait-ms'],
   verify: ['run', 'task'], retry: ['run', 'task', 'feedback-file'], resume: ['run', 'task'],
   input: ['run', 'task', 'keys', 'text-file'], integrate: ['run', 'task'],
@@ -108,7 +133,7 @@ const optionsByCommand = {
   'monitor status': ['id'], 'monitor stop': ['id'],
   'monitor snapshot': ['project', 'run', 'all', 'coordinator', 'codex-home', 'claude-home'],
 };
-const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor', 'skill', 'mode']);
+const namespaces = new Set(['source', 'profile', 'secret', 'route', 'gateway', 'monitor', 'skill', 'mode', 'performance', 'result', 'resources', 'calibration']);
 
 export function parseArgs(argv) {
   const values = {};
@@ -122,7 +147,7 @@ export function parseArgs(argv) {
     }
     const [name, ...inlineParts] = token.slice(2).split('=');
     if (Object.hasOwn(values, name)) throw new OrchestratorError('invalid_arguments', `Duplicate option: --${name}`);
-    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open'].includes(name)) {
+    if (['help', 'json', 'output', 'today', 'table', 'default', 'clear', 'allow-shared', 'stdin', 'all', 'open', 'integrate', 'repair-reports', 'quick', 'refresh', 'confirm-stopped'].includes(name)) {
       if (inlineParts.length) throw new OrchestratorError('invalid_arguments', `--${name} takes no value`);
       values[name] = true;
     } else {
@@ -167,6 +192,24 @@ export async function main(argv = process.argv.slice(2)) {
     return { project, runId: o.run || null, all: !!o.all, coordinatorId: o.coordinator || (o.run ? null : process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null), coordinatorExplicit: Boolean(o.coordinator), codexHome: o['codex-home'], claudeHome: o['claude-home'] };
   };
   switch (command) {
+    case 'resources list':
+    case 'resources check': return new ResourceService({ root: profiles.root, ...(o.home ? { home: path.resolve(o.home) } : {}) }).discover({ check: command.endsWith('check'), ...(o.agent ? { agents: o.agent.split(',') } : {}) });
+    case 'calibration list': return { records: await new CalibrationStore({ root: profiles.root }).list({ resourceId: o.resource }) };
+    case 'calibration release': return releaseCalibrationReservation(profiles.root, required('reservation'), { confirmedStopped: !!o['confirm-stopped'] });
+    case 'calibrate': {
+      if (o.quick && o.suite && o.suite !== 'quick') throw new OrchestratorError('invalid_arguments', '--quick cannot be combined with another suite.');
+      const resources = new ResourceService({ root: profiles.root, ...(o.home ? { home: path.resolve(o.home) } : {}) });
+      const controller = new AbortController();
+      const interrupt = () => { process.exitCode = 130; controller.abort(); };
+      process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
+      try {
+        return await new CalibrationRunner({ root: profiles.root, resources, profiles, ...(o.home ? { home: path.resolve(o.home) } : {}) }).run({
+          resourceIds: required('resource').split(','), suite: o.suite || 'quick', refresh: !!o.refresh,
+          ...(o['timeout-ms'] === undefined ? {} : { timeoutMs: Number(o['timeout-ms']) }),
+          ...(o['budget-ms'] === undefined ? {} : { budgetMs: Number(o['budget-ms']) }), signal: controller.signal,
+        });
+      } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
+    }
     case 'monitor start': {
       const monitor = await new MonitorManager({ root: profiles.root }).start({ ...await monitorScope(), id: o.id || 'default', port: o.port === undefined ? 0 : Number(o.port) });
       return { ...monitor, browserOpened: o.open ? await openMonitor(monitor.url) : false };
@@ -222,6 +265,7 @@ export async function main(argv = process.argv.slice(2)) {
         costPerMillion: previous.costPerMillion,
         modelMap: previous.modelMap,
         fallbacks: previous.fallbacks,
+        ...(previous.modelMetadata ? { modelMetadata: previous.modelMetadata } : {}),
       }, { ifRevision: previous.revision });
     }
     case 'secret set': {
@@ -249,6 +293,29 @@ export async function main(argv = process.argv.slice(2)) {
     case 'gateway stop': return gateways.stop(required('id'));
     case 'gateway list': return gateways.list();
     case 'init': return orchestrator.init({ project: required('project'), id: o.id, maxParallel: Number(o['max-parallel'] || 4) });
+    case 'preflight': return orchestrator.preflight(required('run'), JSON.parse(await read(required('file'))));
+    case 'performance report': return orchestrator.performance(required('run'));
+    case 'step': return new Supervisor({ orchestrator }).step(required('run'), { integrate: !!o.integrate, repairReports: !!o['repair-reports'] });
+    case 'supervise': return new Supervisor({ orchestrator }).supervise(required('run'), {
+      integrate: !!o.integrate, repairReports: !!o['repair-reports'],
+      waitMs: o['wait-ms'] === undefined ? 30000 : Number(o['wait-ms']), pollMs: o['poll-ms'] === undefined ? 1000 : Number(o['poll-ms']),
+    });
+    case 'result submit': {
+      if (Boolean(o.file) === Boolean(o.stdin)) throw new OrchestratorError('invalid_arguments', 'Supply exactly one of --file or --stdin.');
+      const chunks = []; let size = 0;
+      if (o.stdin) {
+        if (process.stdin.isTTY) throw new OrchestratorError('invalid_arguments', 'Pipe the report on stdin.');
+        for await (const chunk of process.stdin) { size += chunk.length; if (size > MAX_RESULT_BYTES) throw new OrchestratorError('invalid_result', 'Result exceeds 128 KiB.'); chunks.push(chunk); }
+      } else {
+        const info = await fs.lstat(path.resolve(o.file));
+        if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_RESULT_BYTES) throw new OrchestratorError('invalid_result', 'Report must be a regular file of at most 128 KiB.');
+        chunks.push(await fs.readFile(path.resolve(o.file)));
+      }
+      let report;
+      try { report = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { throw new OrchestratorError('invalid_result', 'Report is not valid JSON.'); }
+      return submitResult(required('attempt-dir'), report);
+    }
     case 'validate': return validateTask(JSON.parse(await read(required('file'))));
     case 'dispatch': return orchestrator.dispatch(required('run'), JSON.parse(await read(required('file'))));
     case 'status': return orchestrator.status(o.run);

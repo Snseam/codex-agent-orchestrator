@@ -453,6 +453,9 @@ function attemptClosed(attempt) {
 }
 
 function reservationStillActive(reservation, runsById) {
+  // Calibration owns a bounded foreground process, not a Herdr run. Preserve
+  // uncertain claims after a crash; only the owner releases after process exit.
+  if (reservation.ownerKind === 'calibration') return true;
   const run = runsById.get(reservation.runId);
   if (!run) return false;
   const task = taskRecord(run, reservation.taskId);
@@ -472,7 +475,8 @@ function sortReservations(reservations) {
   return [...reservations].sort((a, b) => a.bucketId.localeCompare(b.bucketId) || a.id.localeCompare(b.id));
 }
 
-export async function reserveExecution(root, profile, owner) {
+export async function reserveExecution(root, profile, owner, { ownerKind = 'run' } = {}) {
+  if (!['run', 'calibration'].includes(ownerKind)) throw routeError('invalid_owner', 'Unknown reservation owner kind.');
   const cleanOwner = validateOwner(owner);
   if (!isPlainObject(profile) || typeof profile.id !== 'string') throw routeError('invalid_profile', 'Profile snapshot is invalid.');
   const bucketId = bucketIdForProfile(profile);
@@ -510,6 +514,7 @@ export async function reserveExecution(root, profile, owner) {
       attemptId: cleanOwner.attemptId,
       limit: effectiveLimit,
       profileId: profile.id,
+      ...(ownerKind === 'calibration' ? { ownerKind } : {}),
     };
     const next = sortReservations([...current, reservation]);
     await writeReservations(root, next);

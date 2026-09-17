@@ -20,12 +20,27 @@ test('publicSnapshot exposes only browser contract fields and strips sensitive t
 
   assert.deepEqual(Object.keys(snapshot.nodes[0]).sort(), [
     'agent', 'attemptId', 'confidence', 'conversationId', 'conversationTitle', 'delivery', 'finishedAt', 'id', 'kind', 'label', 'model', 'nativeSessionId', 'observedAt',
-    'parentId', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
+    'parentId', 'performance', 'projectId', 'relation', 'role', 'runId', 'source', 'stale', 'startedAt', 'status', 'statusLabel', 'taskId', 'tokens', 'tokenUsage', 'updatedAt',
   ].sort());
   const serialized = JSON.stringify(snapshot);
   assert.doesNotMatch(serialized, /PROMPT_SECRET|OBJECTIVE_SECRET|MESSAGE_SECRET|TOOL_SECRET|NODE_SECRET|PROJECT_SECRET|SOURCE_SECRET/);
   assert.equal(snapshot.nodes[0].label, 'Worker [31m');
   assert.doesNotMatch(snapshot.nodes[0].label, /[\x00-\x1f]/);
+});
+
+test('monitor timings expose bounded counters without forwarding task evidence', () => {
+  const snapshot = publicSnapshot({ scope: {}, projects: [], sources: [], nodes: [{ id: 'n', performance: {
+    phase: 'blocked', durationsMs: { prepare: 12, execute: -1, secret: 'PRIVATE' }, blockedMs: 15,
+    blocker: { category: 'permission', message: 'PRIVATE' }, progressState: { nonce: 'PRIVATE' },
+    evidence: { checks: ['PRIVATE'] }, coverage: { hasLegacyPrehistory: true },
+  } }] }, now);
+  const timing = snapshot.nodes[0].performance;
+  assert.equal(timing.phase, 'blocked');
+  assert.equal(timing.durationsMs.prepare, 12);
+  assert.equal(timing.durationsMs.execute, null);
+  assert.equal(timing.blockerCategory, 'permission');
+  assert.equal(timing.legacyPrehistory, true);
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE/);
 });
 
 test('publicSnapshot falls back invalid enum and scalar values to safe public values', () => {

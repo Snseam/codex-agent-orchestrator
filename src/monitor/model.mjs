@@ -21,6 +21,20 @@ export function publicTokenUsage(value) {
   };
 }
 
+function publicTiming(value) {
+  if (!value || typeof value !== 'object') return null;
+  const phases = ['prepare', 'launch', 'execute', 'collect', 'verify', 'integrate'];
+  return {
+    phase: [...phases, 'blocked', 'finished', 'unknown'].includes(value.phase) ? value.phase : 'unknown',
+    durationsMs: Object.fromEntries(phases.map(phase => [phase, counter(value.durationsMs?.[phase])])),
+    blockedMs: counter(value.blockedMs),
+    lastProgressAt: date(value.lastProgressAt),
+    lastObservedAt: date(value.lastObservedAt),
+    blockerCategory: cleanText(value.blocker?.category, 40),
+    legacyPrehistory: value.coverage?.hasLegacyPrehistory === true,
+  };
+}
+
 // This is the only shape allowed to cross the browser boundary. Do not spread source records.
 export function publicNode(node, observedAt) {
   node = node && typeof node === 'object' ? node : {};
@@ -41,6 +55,7 @@ export function publicNode(node, observedAt) {
     confidence: ['live', 'observed', 'reported', 'unknown'].includes(node.confidence) ? node.confidence : 'unknown',
     relation: ['native', 'cao', 'workspace', 'unlinked'].includes(node.relation) ? node.relation : 'unlinked',
     tokens: tokenUsage?.total ?? counter(node.tokens), tokenUsage,
+    performance: publicTiming(node.performance),
   };
 }
 

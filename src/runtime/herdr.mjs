@@ -3,6 +3,9 @@ import { dirname } from 'node:path';
 import { mkdirSync, openSync, closeSync, chmodSync } from 'node:fs';
 import { runCommand } from '../process.mjs';
 import { OrchestratorError } from '../errors.mjs';
+import { executableAvailable } from '../preflight.mjs';
+import { findExecutableBounded } from '../resources/index.mjs';
+import { randomUUID } from 'node:crypto';
 
 const HERDR_CONTEXT_KEYS = [
   'HERDR_CONFIG_PATH',
@@ -108,10 +111,17 @@ export class Herdr {
     this.runner = runner;
     this.environment = environment;
     this.spawner = spawner;
+    this.agentExecutables = new Map();
   }
 
   env() {
     return cleanHerdrEnv(this.environment);
+  }
+
+  async preflight(kind) {
+    const found = await findExecutableBounded(kind, { environment: this.env(), ...(this.environment.HOME ? { home: this.environment.HOME } : {}) });
+    if (found.executable) this.agentExecutables.set(kind, found);
+    return { herdr: { available: await executableAvailable(this.binary, { env: this.env() }) }, agent: { available: Boolean(found.executable), discoverySource: found.discoverySource } };
   }
 
   async json(args, { timeoutMs = 30000 } = {}) {
@@ -222,8 +232,17 @@ export class Herdr {
     return this.json(args);
   }
 
-  startAgent(session, name, kind, pane, args = []) {
+  async startAgent(session, name, kind, pane, args = []) {
     validateSession(session);
+    const found = this.agentExecutables.get(kind);
+    if (found?.executable && found.discoverySource !== 'PATH') {
+      const directory = dirname(found.executable);
+      const quoted = `'${directory.replaceAll("'", "'\\''")}'`;
+      const nonce = randomUUID();
+      await this.prepareEnvironment(session, pane, {
+        bootstrap: `export PATH=${quoted}:"$PATH"; printf '\\nCAO_PATH_%s\\n' '${nonce}'`, readyMarker: `CAO_PATH_${nonce}`,
+      });
+    }
     const argv = ['--session', session, 'agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '30000'];
     if (args.length > 0) argv.push('--', ...args);
     return this.json(argv, { timeoutMs: 45000 });

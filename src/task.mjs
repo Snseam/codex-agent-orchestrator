@@ -18,6 +18,7 @@ const KNOWN_KEYS = new Set([
   'maxAttempts',
   'dependsOn',
   'execution',
+  'deadlineAt',
 ]);
 
 const AGENTS = new Set(['claude', 'pi', 'opencode', 'codex', 'auto']);
@@ -194,6 +195,17 @@ export function validateTask(object) {
   const nativeInstructions = requireString(object.nativeInstructions ?? '', 'nativeInstructions');
   const maxChildren = normalizeNonnegativeInteger(object.maxChildren ?? 0, 'maxChildren');
   const maxAttempts = normalizePositiveInteger(object.maxAttempts ?? 3, 'maxAttempts', 20);
+  let deadlineAt;
+  if (object.deadlineAt !== undefined) {
+    if (typeof object.deadlineAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(object.deadlineAt) || !Number.isFinite(Date.parse(object.deadlineAt))) {
+      throw taskError('invalid_task', 'deadlineAt must be an ISO UTC timestamp', { field: 'deadlineAt' });
+    }
+    deadlineAt = new Date(object.deadlineAt).toISOString();
+    const canonicalInput = object.deadlineAt.length === 20 ? object.deadlineAt.replace('Z', '.000Z') : object.deadlineAt;
+    if (deadlineAt !== canonicalInput) {
+      throw taskError('invalid_task', 'deadlineAt must be a real calendar timestamp', { field: 'deadlineAt' });
+    }
+  }
   const dependsOn = normalizeUniqueSorted(normalizeStringArray(object.dependsOn ?? [], 'dependsOn', { safeIds: true }));
   if (dependsOn.includes(id)) {
     throw taskError('invalid_task', 'dependsOn must not include the task id', { id });
@@ -213,6 +225,7 @@ export function validateTask(object) {
     maxAttempts,
     dependsOn,
     ...(execution ? { execution } : {}),
+    ...(deadlineAt ? { deadlineAt } : {}),
   };
 }
 

@@ -111,13 +111,14 @@ The first implementation supports the real CC Switch 3.20.x schema with `PRAGMA 
 Supported imports in this version:
 
 - Claude direct API records whose `settings_config.env` contains `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`.
+- Pi provider records with `baseUrl`, a supported `api`, a `models` catalog and a literal `apiKey`. Select a model with `--model`; available context/output limits become `modelMetadata`.
 - `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `DEFAULT_SONNET_MODEL`, and Anthropic default model fields when present.
 - Explicit reuse of the current active Claude proxy only when you pass `--allow-shared`.
 
 Unsupported in this version:
 
 - OAuth-only CC Switch records as direct profiles.
-- Codex, Pi, OpenCode, or other CC Switch client records as direct profiles.
+- Codex, OpenCode, or other unsupported CC Switch client records as direct profiles; Pi command/interpolation-backed keys are also unsupported.
 - Automatic CC Switch switching or writes to the CC Switch database.
 
 Import examples:

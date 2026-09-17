@@ -111,13 +111,14 @@ node bin/cao.mjs source discover --directory ~/.cc-switch
 本版本支持导入：
 
 - `settings_config.env` 中包含 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_API_KEY` 的 Claude direct API 记录。
+- 包含 `baseUrl`、受支持 `api`、`models` 目录及字面 `apiKey` 的 Pi provider。可用 `--model` 选定模型，上下文和输出限制写入 `modelMetadata`。
 - 存在时读取 `ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`、`DEFAULT_SONNET_MODEL` 以及 Anthropic 默认模型字段。
 - 仅在显式传入 `--allow-shared` 时复用当前 active Claude proxy。
 
 本版本不支持：
 
 - 将 OAuth-only CC Switch 记录作为 direct profile 导入。
-- 将 Codex、Pi、OpenCode 或其他 CC Switch client 记录作为 direct profile 导入。
+- 将 Codex、OpenCode 或其他未支持的 CC Switch client 记录作为 direct profile 导入；Pi 的命令型/插值型 key 也不支持直接导入。
 - 自动切换 CC Switch 或写入 CC Switch 数据库。
 
 导入示例：

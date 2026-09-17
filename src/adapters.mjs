@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 export const capabilities = {
   claude: {
     herdrKind: 'claude',
@@ -105,6 +107,7 @@ Child/inner-agent reporting:
 
 Result contract:
 - Write the result file last, after edits and checks.
+- Prefer the atomic submission helper with the result JSON on stdin. Its argv is ${JSON.stringify([process.execPath, fileURLToPath(new URL('../bin/cao.mjs', import.meta.url)), 'result', 'submit', '--attempt-dir', attempt.directory, '--stdin'])}. It validates your report; it does not accept the task or run checks for you. Direct result-file writing remains supported.
 - The result file must contain one JSON object with this shape:
 ${JSON.stringify(skeleton, null, 2)}
 - status must be "submitted" when you have delivered work for verification, or "needs_input" when blocked on user/controller input.

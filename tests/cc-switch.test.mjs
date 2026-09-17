@@ -9,6 +9,25 @@ import { ProfileStore } from '../src/profiles.mjs';
 const dummyClaudeKey = 'dummy-claude-key-for-synthetic-test';
 const dummyOAuthToken = 'dummy-oauth-token-for-synthetic-test';
 
+test('Pi CC Switch providers expose model metadata and import credential references without copying keys', async t => {
+  const directory = await temporaryDirectory(t);
+  await createDatabase(directory);
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(join(directory, 'cc-switch.db'));
+  db.prepare('INSERT INTO providers(id,app_type,name,settings_config,meta,is_current,provider_type) VALUES(?,?,?,?,?,?,?)').run('pi-kimi', 'pi', 'Kimi', JSON.stringify({ api: 'anthropic-messages', baseUrl: 'https://api.example.test/v1', apiKey: 'private-pi-test-key', models: [{ id: 'k3', contextWindow: 1000000, maxTokens: 128000 }] }), '{}', 0, 'api');
+  db.close();
+  const inventory = await discoverCCSwitch({ directory });
+  const p = inventory.providers.find(p => p.providerId === 'pi-kimi');
+  assert.equal(p.supported, true); assert.equal(p.authKind, 'pi-api');
+  assert.doesNotMatch(JSON.stringify(inventory), /private-pi-test-key/);
+  const profile = await importCCSwitchProfile({ directory, providerId: 'pi-kimi', app: 'pi', id: 'pi-import' });
+  assert.deepEqual(profile.modelMetadata, { contextWindow: 1000000, maxOutputTokens: 128000 });
+  const store = new ProfileStore({ root: join(directory, 'state') });
+  const saved = await store.put(profile);
+  assert.equal(await store.resolveProfileSecret(saved), 'private-pi-test-key');
+  await assert.rejects(importCCSwitchProfile({ directory, providerId: 'pi-kimi', app: 'pi', model: 'not-in-catalog' }), e => e.code === 'cc_switch_model_not_found');
+});
+
 async function temporaryDirectory(t) {
   const directory = await mkdtemp(join(tmpdir(), 'cao-cc-switch-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

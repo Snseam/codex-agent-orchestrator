@@ -101,6 +101,8 @@ dispatch → collect → verify → integrate
 
 Each stage is an explicit CLI command. Task submission is not completion: `collect` requires an attempt-specific result, and `verify` runs checks independently of the agent's claims.
 
+For existing tasks, `supervise --run RUN_ID` advances collection and verification in a foreground loop. Add `--integrate` to permit patch integration and `--repair-reports` to permit one report-only repair per attempt. `performance report --run RUN_ID` shows observed phase durations and outcome coverage. See [supervision and performance](docs/supervision.md) for deadlines and recovery limits.
+
 ## Quick start
 
 ### 1. Prerequisites
@@ -284,6 +286,8 @@ Plain `npm run smoke` only prints instructions. Live smoke tests use your config
 | [Execution profiles and routing](docs/execution-profiles.md) | Profile CRUD, secrets, CC Switch import, routing, gateway lifecycle |
 | [Local Agent Monitor](docs/monitor.md) | Read-only local dashboard for CAO, Codex, and Claude metadata |
 | [Task states and recovery](docs/states.md) | Result contract, retries, interaction, checkout and integration holds |
+| [Supervision and performance](docs/supervision.md) | Foreground controller, preflight, report submission, deadlines and timing evidence |
+| [Resources and calibration](docs/resources.md) | Native/NVM discovery, CC Switch Pi profiles, isolated probes and cached evidence |
 | [Token usage reports](docs/usage.md) | Optional Tokscale integration, JSON shape, attribution boundaries |
 | [CAO Codex skill](docs/codex-skill.md) | One-prompt installation, `/CAO` activation, conversation preferences, and updates |
 | [Changelog](CHANGELOG.md) | Release history |

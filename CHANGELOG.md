@@ -6,6 +6,15 @@ Notable changes to Codex Agent Orchestrator are recorded here. Pre-1.0 interface
 
 ### Added
 
+- Native/managed `resources list/check`, including NVM installations, distinct Pi provider/model candidates, configuration fingerprints, quota freshness and cached call-verification evidence.
+- Explicit isolated Claude/Pi `calibrate` quick/code suites, bounded model calls, private temporary configuration, independent code checks and real/mock-aware evidence caching. These probes are not production harness or overall quality benchmarks.
+- CC Switch schema-18 Pi API-provider discovery and reference import, explicit Pi model metadata, and labelled unknown price/compatibility metadata.
+
+- Foreground `step` / `supervise` commands to reconcile existing tasks and advance independent verification, with explicit integration and one-shot report-repair options, per-run controller ownership, deadline checks, and attention on unresolved work.
+- Read-only task `preflight`, optional absolute `deadlineAt`, and atomic `result submit` with identity/size checks. Expired retained edits can still be explicitly rechecked through recovery without restarting implementation.
+- `performance report` with observed phase/blocked durations, outcome and legacy-data coverage, sequenced post-commit observation events, and sanitized timing metadata in monitor snapshots. These are execution observations, not model inference benchmarks or speedup claims.
+- English and Chinese supervision guides and regression coverage for acknowledgement loss, controller concurrency, deadline/recovery behavior, and end-to-end CLI verification/integration.
+
 - Installable **CAO** Codex skill, a copyable README installation request, and `skill install/status/uninstall` commands with linked-checkout updates and conflict protection.
 - Per-conversation `mode enable/status/disable` preferences for continuing CAO development across turns, with independent project/agent/profile/limit settings and recovery notes. Desktop activation uses the `/CAO` skill suggestion; CLI supports `$cao` and `/skills`.
 - `usage` queries local Claude Code, Codex CLI, Pi, and OpenCode token records through optional Tokscale tooling (`>=4.16.0 <5`).
